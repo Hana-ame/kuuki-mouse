@@ -1,0 +1,37 @@
+// grpc_remote_control/remote_control.proto
+
+syntax = "proto3";
+
+package remote_control;
+
+// The remote control service definition.
+service RemoteController {
+  // Gets the current mouse position
+  rpc GetMousePosition(EmptyRequest) returns (MousePosition) {}
+
+  // Moves the mouse to a specific position
+  rpc MoveMouse(MousePosition) returns (EmptyResponse) {}
+
+  // Click
+  rpc ClickMouse(TextInput) returns (EmptyResponse) {}
+
+  // Sends a string of text to be typed
+  rpc SendText(TextInput) returns (EmptyResponse) {}
+}
+
+// An empty message for requests that don't need parameters
+message EmptyRequest {}
+
+// An empty message for responses that don't need to return data
+message EmptyResponse {}
+
+// Represents the mouse coordinates
+message MousePosition {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+// Represents the text to be typed
+message TextInput {
+  string text = 1;
+}

@@ -2,6 +2,8 @@
 // 按下按钮之后,挂载 Motion 和 Orientation
 document.addEventListener('DOMContentLoaded', () => {
     // 获得显示区Element
+    const body = document.getElementById('body');
+
     const accelXElem = document.getElementById('accelX');
     const accelYElem = document.getElementById('accelY');
     const accelZElem = document.getElementById('accelZ');
@@ -34,7 +36,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         socket.onopen = () => {
             console.log('WebSocket connection established.');
-            statusElem.textContent = '传感器已激活，WebSocket已连接。';
+            if (statusElem) statusElem.textContent = '传感器已激活，WebSocket已连接。';
         };
 
         socket.onmessage = (event) => {
@@ -44,14 +46,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
         socket.onclose = (event) => {
             console.log('WebSocket connection closed:', event.code, event.reason);
-            statusElem.textContent = 'WebSocket 连接已断开。尝试重新连接...';
+            if (statusElem) statusElem.textContent = 'WebSocket 连接已断开。尝试重新连接...';
             // Optional: attempt to reconnect after a delay
             setTimeout(connectWebSocket, 500);
         };
 
         socket.onerror = (error) => {
             console.error('WebSocket error:', error);
-            statusElem.textContent = 'WebSocket 连接错误。';
+            if (statusElem) statusElem.textContent = 'WebSocket 连接错误。';
         };
     }
     // --- End WebSocket ---
@@ -74,55 +76,69 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-
+    function sendMessage() {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({
+                message: 'left',
+            }));
+        }
+    }
 
     function handleMotion(event) {
+        // if (!accelXElem || !accelYElem || !accelZElem) {
+        // sendSensorData();
+        // return;
+        // }
         // if (!motionListenerActive) {
         //     statusElem.textContent = '加速度计数据已激活!';
         //     motionListenerActive = true;
         // }
         if (event.accelerationIncludingGravity) {
-            accelXElem.textContent = event.accelerationIncludingGravity.x !== null ? event.accelerationIncludingGravity.x.toFixed(2) : 'N/A';
-            accelYElem.textContent = event.accelerationIncludingGravity.y !== null ? event.accelerationIncludingGravity.y.toFixed(2) : 'N/A';
-            accelZElem.textContent = event.accelerationIncludingGravity.z !== null ? event.accelerationIncludingGravity.z.toFixed(2) : 'N/A';
+            if (accelXElem) accelXElem.textContent = event.accelerationIncludingGravity.x !== null ? event.accelerationIncludingGravity.x.toFixed(2) : 'N/A';
+            if (accelYElem) accelYElem.textContent = event.accelerationIncludingGravity.y !== null ? event.accelerationIncludingGravity.y.toFixed(2) : 'N/A';
+            if (accelZElem) accelZElem.textContent = event.accelerationIncludingGravity.z !== null ? event.accelerationIncludingGravity.z.toFixed(2) : 'N/A';
             currentAccel = {
                 x: event.accelerationIncludingGravity.x,
                 y: event.accelerationIncludingGravity.y,
                 z: event.accelerationIncludingGravity.z
             };
         } else if (event.acceleration) { // Fallback for some devices
-            accelXElem.textContent = event.acceleration.x !== null ? event.acceleration.x.toFixed(2) : 'N/A';
-            accelYElem.textContent = event.acceleration.y !== null ? event.acceleration.y.toFixed(2) : 'N/A';
-            accelZElem.textContent = event.acceleration.z !== null ? event.acceleration.z.toFixed(2) : 'N/A';
+            if (accelXElem) accelXElem.textContent = event.acceleration.x !== null ? event.acceleration.x.toFixed(2) : 'N/A';
+            if (accelYElem) accelYElem.textContent = event.acceleration.y !== null ? event.acceleration.y.toFixed(2) : 'N/A';
+            if (accelZElem) accelZElem.textContent = event.acceleration.z !== null ? event.acceleration.z.toFixed(2) : 'N/A';
             currentAccel = {
                 x: event.acceleration.x,
                 y: event.acceleration.y,
                 z: event.acceleration.z
             };
         } else {
-            accelXElem.textContent = 'N/A';
-            accelYElem.textContent = 'N/A';
-            accelZElem.textContent = 'N/A';
+            if (accelXElem) accelXElem.textContent = 'N/A';
+            if (accelYElem) accelYElem.textContent = 'N/A';
+            if (accelZElem) accelZElem.textContent = 'N/A';
         }
-        
+
         sendSensorData();
     }
 
     function handleOrientation(event) {
+        // if (!gyroAlphaElem || !gyroBetaElem || !gyroGammaElem) {
+        //     sendSensorData();
+        //     return;
+        // }
         // if (!orientationListenerActive) {
         //     statusElem.textContent = '陀螺仪数据已激活!'; // This might overwrite accel status
         //     orientationListenerActive = true;
         // }
-        gyroAlphaElem.textContent = event.alpha !== null ? event.alpha.toFixed(2) : 'N/A';
-        gyroBetaElem.textContent = event.beta !== null ? event.beta.toFixed(2) : 'N/A';
-        gyroGammaElem.textContent = event.gamma !== null ? event.gamma.toFixed(2) : 'N/A';
+        if (gyroAlphaElem) gyroAlphaElem.textContent = event.alpha !== null ? event.alpha.toFixed(2) : 'N/A';
+        if (gyroBetaElem) gyroBetaElem.textContent = event.beta !== null ? event.beta.toFixed(2) : 'N/A';
+        if (gyroGammaElem) gyroGammaElem.textContent = event.gamma !== null ? event.gamma.toFixed(2) : 'N/A';
 
         currentGyro = {
             alpha: event.alpha,
             beta: event.beta,
             gamma: event.gamma,
         };
-        
+
         sendSensorData();
     }
 
@@ -130,7 +146,12 @@ document.addEventListener('DOMContentLoaded', () => {
         connectWebSocket(); // Ensure WebSocket is connected before requesting permissions
         // Update status to indicate permission request 
 
-        statusElem.textContent = '正在请求传感器权限...';
+        if (body) {
+
+            return
+        }
+
+        if (statusElem) statusElem.textContent = '正在请求传感器权限...';
 
         // iOS 13+ Safari specific permission request
         if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
@@ -138,22 +159,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 .then(permissionState => {
                     if (permissionState === 'granted') {
                         window.addEventListener('devicemotion', handleMotion, true);
-                        statusElem.textContent = '加速度计权限已授予。';
+                        if (statusElem) statusElem.textContent = '加速度计权限已授予。';
                     } else {
-                        statusElem.textContent = '加速度计权限被拒绝。';
+                        if (statusElem) statusElem.textContent = '加速度计权限被拒绝。';
                     }
                 })
                 .catch(error => {
-                    statusElem.textContent = '请求加速度计权限时出错: ' + error;
+                    if (statusElem) statusElem.textContent = '请求加速度计权限时出错: ' + error;
                     console.error('DeviceMotionEvent Error:', error);
                 });
         } else {
             // For other browsers or older iOS
             if (window.DeviceMotionEvent) {
                 window.addEventListener('devicemotion', handleMotion, true);
-                statusElem.textContent = '尝试监听加速度计... (非iOS13+或安卓)';
+                if (statusElem) statusElem.textContent = '尝试监听加速度计... (非iOS13+或安卓)';
             } else {
-                statusElem.textContent = '此浏览器不支持加速度计事件。';
+                if (statusElem) statusElem.textContent = '此浏览器不支持加速度计事件。';
             }
         }
 
@@ -163,39 +184,46 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (permissionState === 'granted') {
                         window.addEventListener('deviceorientation', handleOrientation, true);
                         // Append to status, don't overwrite if motion was successful
-                        statusElem.textContent += ' 陀螺仪权限已授予。';
+                        if (statusElem) statusElem.textContent += ' 陀螺仪权限已授予。';
                     } else {
-                        statusElem.textContent += ' 陀螺仪权限被拒绝。';
+                        if (statusElem) statusElem.textContent += ' 陀螺仪权限被拒绝。';
                     }
                 })
                 .catch(error => {
-                    statusElem.textContent += ' 请求陀螺仪权限时出错: ' + error;
+                    if (statusElem) statusElem.textContent += ' 请求陀螺仪权限时出错: ' + error;
                     console.error('DeviceOrientationEvent Error:', error);
                 });
         } else {
             // For other browsers or older iOS
             if (window.DeviceOrientationEvent) {
                 window.addEventListener('deviceorientation', handleOrientation, true);
-                statusElem.textContent += ' 尝试监听陀螺仪... (非iOS13+或安卓)';
+                if (statusElem) statusElem.textContent += ' 尝试监听陀螺仪... (非iOS13+或安卓)';
             } else {
-                statusElem.textContent += ' 此浏览器不支持陀螺仪事件。';
+                if (statusElem) statusElem.textContent += ' 此浏览器不支持陀螺仪事件。';
             }
         }
 
         // Hide the button after attempting to start
-        startButton.style.display = 'none';
+        if (startButton) startButton.style.display = 'none';
+    }
+
+
+    if (body) {
+        body.addEventListener('click', sendMessage)
     }
 
     if (startButton) {
         startButton.addEventListener('click', requestSensorPermissions);
     } else {
         console.error("Start button not found!");
+        requestSensorPermissions();
     }
 
     // Check if sensors are readily available (e.g., on Android or already permitted)
     // This is more of a fallback / immediate check if button isn't needed.
     // However, best practice is to always require user interaction for permission.
     if (!startButton) { // If there's no button, try to initialize directly (less common)
+        console.error("Start button not found!");
         if (window.DeviceMotionEvent && !DeviceMotionEvent.requestPermission) {
             window.addEventListener('devicemotion', handleMotion);
         }

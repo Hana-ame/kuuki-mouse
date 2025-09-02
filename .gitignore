@@ -1,6 +1,9 @@
 *.pem
 
 __pycache__
+dist
+build
+.venv
 
 *pb2_grpc.py
 *pb2.py

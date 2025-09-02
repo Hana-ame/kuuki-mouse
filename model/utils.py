@@ -25,5 +25,23 @@ def get_gravity_float(beta: float, gamma: float):
 def to_tensor(x:float,y:float,z:float):
     return torch.Tensor([x,y,z])
 
+
+def process_tensor(input_tensor: torch.Tensor, deviation: float = .15) -> torch.Tensor:
+    # 创建布尔掩码
+    mask_gt = input_tensor > deviation    # 大于1.5的掩码
+    mask_lt = input_tensor < -deviation   # 小于-1.5的掩码
+    mask_mid = ~(mask_gt | mask_lt) # 中间区域的掩码（既不是大于1.5也不是小于-1.5）
+
+    # 初始化一个结果张量，先复制原值
+    result = input_tensor.clone()
+
+    # 应用条件操作
+    result[mask_gt] = input_tensor[mask_gt] - deviation  # 大于1.5的减去1.5
+    result[mask_lt] = input_tensor[mask_lt] + deviation  # 小于-1.5的加上1.5
+    result[mask_mid] = 0.0                         # 中间的设为0
+
+    return result
+
+
 if __name__ == '__main__':
     print(get_gravity(torch.Tensor([1.3/180*torch.pi]),torch.Tensor([6.1/180*torch.pi])))

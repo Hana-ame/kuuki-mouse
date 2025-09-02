@@ -1,7 +1,5 @@
 from pynput.mouse import Button, Controller as MouseController
 
-from grpc_remote_control import GrpcController
-
 class PynputMouseController:
     def __init__(self):
         self.mouse = MouseController()

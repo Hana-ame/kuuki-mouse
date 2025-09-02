@@ -3,15 +3,13 @@ import asyncio
 import ssl
 import websockets
 import http.server
-import socketserver
 import os
-import time
 import json
 from pathlib import Path
 
 from cert import generate_self_signed_cert
 
-from app import get_data
+from app import get_data, get_message
 # from data_logger import get_data
 
 
@@ -31,6 +29,8 @@ async def websocket_handler(websocket, path):
             # print(message)
             try:
                 data_dict = json.loads(message)
+                if data_dict.get("message"):
+                    get_message(data_dict.get("message"))
                 get_data(data_dict['x'], data_dict['y'], data_dict['z'], data_dict['alpha'], data_dict['beta'], data_dict['gamma'])
             except Exception as e:
                 print(e)
@@ -79,6 +79,7 @@ def http_server_handler(path, request_headers):
     """
     一个回退函数，用于处理非WebSocket的HTTP请求。
     """
+    
     if "Upgrade" in request_headers and request_headers["Upgrade"] == "websocket":
         return  # 让 `websockets` 库处理它
 

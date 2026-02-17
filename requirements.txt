@@ -6,4 +6,6 @@ cryptography
 # grpcio-tools
 pynput
 
+pyperclip
+
 pyinstaller

@@ -1,129 +1,70 @@
-import asyncio
 import time
-
-# from grpc_remote_control.controller import GrpcController
+import math
 from controller import PynputMouseKeyboardController
 
-# from model import get_gravity_float, to_tensor, process_tensor
 
-# from server import main
-
-
+# --- 2. App 类 (灵敏度调整为 2x) ---
+# --- 2. App 类 (修改核心算法) ---
 class App(PynputMouseKeyboardController):
     def __init__(
-        self,
-        sensitivity: float = 300,
-        attenuation_coefficient: float = 1,
-        scale: float = 0.1,
+        self, sensitivity: float = 50.0, dead_zone: float = 0.05, scale: float = 1.0
     ):
         super().__init__()
-        self.sensitivity = sensitivity
+        self.sensitivity = sensitivity  # 提高基础灵敏度
         self.scale = scale
-        self.attenuation_coefficient = attenuation_coefficient
+        self.dead_zone = dead_zone  # 降低死区
+        self._last_alpha = None
+        self._last_beta = None
+        self._pending_x = 0.0
+        self._pending_y = 0.0
 
-        self._last_data_timestamp = 0
-        self._x = 0  # previous status
-        self._y = 0  # previous status
-        self._z = 0  # previous status
-        self._alpha = 0  # previous status
-        self._beta = 0  # previous status
-        self._gamma = 0  # previous status
-        self._last_acc_timestamp = 0
+    def _normalize_angle_delta(self, delta: float) -> float:
+        if delta > 180:
+            delta -= 360
+        elif delta < -180:
+            delta += 360
+        return delta
 
-        self.v_x = 0  # 横轴上的速度
-        self.v_y = 0  # 纵轴上的速度
+    def update_data(self, x, y, z, alpha, beta, gamma):
+        if self._last_alpha is None:
+            self._last_alpha = alpha
+            self._last_beta = beta
+            return
 
-    def update_data(
-        self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float
-    ):
-        data_timestamp = time.time()
-        time_diff = data_timestamp - self._last_data_timestamp
-        # a = to_tensor(x,y,z)
-        # g = get_gravity_float(beta, gamma)
-        # a_dash = a - g
+        d_alpha = self._normalize_angle_delta(alpha - self._last_alpha)
+        d_beta = self._normalize_angle_delta(beta - self._last_beta)
 
-        # # 需要：（用不了，飘逸太严重了。）
-        # # 1.忽略<0.15的部分，这个是精度误差。
-        # a_dash_dash = process_tensor(a_dash,.5)
-        # # print(a_dash_dash[1].item(), time_diff, self.sensitivity)
-        # # 2.测得的是这段时间内的平均加速度，因此需要乘以时间间隔得到速度。
-        # self.v_x += a_dash_dash[0].item()*self.sensitivity
-        # self.v_y += a_dash_dash[1].item()*self.sensitivity
-        # # 3.速度应该有衰减系数。
-        # self.v_x *= self.attenuation_coefficient
-        # self.v_y *= self.attenuation_coefficient
+        # 应用死区
+        if abs(d_alpha) < self.dead_zone:
+            d_alpha = 0
+        if abs(d_beta) < self.dead_zone:
+            d_beta = 0
 
-        delta_x = alpha - self._alpha
-        if abs(delta_x) > 90:
-            delta_x = 0
-        delta_y = beta - self._beta
-        if abs(delta_y) > 90:
-            delta_y = 0
+        # --- 核心修改：平方项趋势 ---
+        # 公式：output = sign(d) * (|d|)^2 * sensitivity
+        # 效果：小移动更小(精准)，大移动更大(快速)
 
-        self.v_x = delta_x * self.sensitivity
-        self.v_y = delta_y * self.sensitivity
+        # 计算 X 轴位移
+        if d_alpha != 0:
+            # d_alpha * abs(d_alpha) 相当于保留了符号的平方 (d^2)
+            # 这样就不需要单独调用 sign() 函数了
+            processed_alpha = d_alpha * abs(d_alpha)
+            self._pending_x += -processed_alpha * self.sensitivity
 
-        # print(self.v_x,a_dash_dash[0].item(), time_diff, self.sensitivity)
-        # # print(self.v_x, self.v_y)
+        # 计算 Y 轴位移
+        if d_beta != 0:
+            processed_beta = d_beta * abs(d_beta)
+            self._pending_y += -processed_beta * self.sensitivity
 
-        # 参考https://github.com/TechTalkies/YouTube/blob/main/48%20ESP32%20Air%20Mouse/47_ESP32_AirMouse.ino
-        # 直接是用
+        self.update_mouse()
 
-        # 善后处理
-        self._x = x
-        self._y = y
-        self._z = z
-        self._alpha = alpha
-        self._beta = beta
-        self._gamma = gamma
-        self._last_data_timestamp = data_timestamp
+        self._last_alpha = alpha
+        self._last_beta = beta
 
     def update_mouse(self):
-        # if self.v_x*self.scale > 10 or self.v_x*self.scale < -10:
-        #     self.v_x = 0
-        # if self.v_y*self.scale > 10 or self.v_y*self.scale < -10:
-        #     self.v_y = 0
-        # print((self.v_x) * self.scale, (self.v_y) * self.scale)
-        self.move_mouse(
-            -int(self.v_x * self.scale),
-            (
-                -int(self.v_y * self.scale)
-                #if self._gamma < 0
-                #else int(self.v_y * self.scale)
-            ),
-        )
-
-
-app = App()
-
-
-def data_loop(x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
-    print(
-        f"Received data: x={x:02f}, y={y:02f}, z={z:02f}, alpha={alpha:02f}, beta={beta:02f}, gamma={gamma:02f}"
-    )
-
-
-def get_data(x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
-    # data_loop(x,y,z,alpha,beta,gamma)
-    app.update_data(x, y, z, alpha, beta, gamma)
-    app.update_mouse()
-
-
-def mouse_event(message: str):
-    app.click_mouse(message)
-
-def text_event(message:str):
-    app.type_text(message)
-
-def key_event(message:str):
-    app.press_key(message)
-    
-def key_down(key:str):
-    app.key_down(key)
-def key_up(key:str):
-    app.key_up(key)
-# if __name__ == "__main__":
-#     try:
-#         asyncio.run(main())
-#     except KeyboardInterrupt:
-#         print("\n服务器正在关闭。")
+        dx = int(self._pending_x * self.scale)
+        dy = int(self._pending_y * self.scale)
+        if dx != 0 or dy != 0:
+            self.move_mouse(dx, dy)
+            self._pending_x -= dx / self.scale
+            self._pending_y -= dy / self.scale

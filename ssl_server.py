@@ -125,11 +125,12 @@ class FileHandler(http.server.SimpleHTTPRequestHandler):
 
 # --- 证书下载逻辑 ---
 def download_certs_via_scp():
-    """使用 SSH cat 从远程服务器下载证书文件。"""
+    """使用 SSH cat 和 find 从远程服务器动态定位并下载证书文件。"""
     print(f"正在从 {CERT_SOURCE_SERVER} 下载证书...")
     try:
-        key_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'cat {REMOTE_CERT_DIR}/{REMOTE_KEY_FILE}' > {LOCAL_KEY_FILE}"
-        cert_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'cat {REMOTE_CERT_DIR}/{REMOTE_CERT_FILE}' > {LOCAL_CERT_FILE}"
+        # 使用 find 模糊匹配寻找 acme.sh 目录下的 key 和 cer，无视 ecc 或普通后缀
+        key_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'find /root/.acme.sh -name \"*d.moonchan.xyz.key\" | head -n 1 | xargs cat' > {LOCAL_KEY_FILE}"
+        cert_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'find /root/.acme.sh -name \"fullchain.cer\" -path \"*d.moonchan.xyz*\" | head -n 1 | xargs cat' > {LOCAL_CERT_FILE}"
         
         print(f"执行命令获取私钥...")
         subprocess.run(key_cmd, shell=True, check=True)

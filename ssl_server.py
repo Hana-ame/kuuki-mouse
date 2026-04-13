@@ -127,18 +127,20 @@ class FileHandler(http.server.SimpleHTTPRequestHandler):
 def download_certs_via_scp():
     """使用 SSH cat 和 find 从远程服务器动态定位并下载证书文件。"""
     print(f"正在从 {CERT_SOURCE_SERVER} 下载证书...")
+    import os
     try:
-        # 使用 find 模糊匹配寻找 acme.sh 目录下的 key 和 cer，无视 ecc 或普通后缀
-        key_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'find /root/.acme.sh -name \"*d.moonchan.xyz.key\" | head -n 1 | xargs cat' > {LOCAL_KEY_FILE}"
-        cert_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'find /root/.acme.sh -name \"fullchain.cer\" -path \"*d.moonchan.xyz*\" | head -n 1 | xargs cat' > {LOCAL_CERT_FILE}"
+        # 使用数组传参和 stdout 重定向，彻底避开 Windows cmd.exe 对管道符 | 的错误本地拦截
+        key_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", CERT_SOURCE_SERVER, 'find /root/.acme.sh -name "*d.moonchan.xyz.key" | head -n 1 | xargs cat']
+        cert_cmd = ["ssh", "-o", "StrictHostKeyChecking=no", CERT_SOURCE_SERVER, 'find /root/.acme.sh -name "fullchain.cer" -path "*d.moonchan.xyz*" | head -n 1 | xargs cat']
         
         print(f"执行命令获取私钥...")
-        subprocess.run(key_cmd, shell=True, check=True)
+        with open(LOCAL_KEY_FILE, "wb") as f:
+            subprocess.run(key_cmd, stdout=f, check=True)
         
         print(f"执行命令获取证书...")
-        subprocess.run(cert_cmd, shell=True, check=True)
+        with open(LOCAL_CERT_FILE, "wb") as f:
+            subprocess.run(cert_cmd, stdout=f, check=True)
         
-        import os
         if os.path.exists(LOCAL_KEY_FILE) and os.path.getsize(LOCAL_KEY_FILE) > 0:
             print("证书下载成功。")
             return True
@@ -157,8 +159,11 @@ async def main():
 
     # 尝试下载证书
     if not download_certs_via_scp():
-        print("错误：无法下载证书，服务器启动失败。")
-        return
+        if os.path.exists(LOCAL_CERT_FILE) and os.path.exists(LOCAL_KEY_FILE):
+            print("警告：无法更新证书，但检测到本地已存在证书文件，跳过下载并继续启动。")
+        else:
+            print("错误：无法下载证书且本地无旧证书，服务器启动失败。")
+            return
 
     # 检查证书文件是否存在
     if not os.path.exists(LOCAL_CERT_FILE) or not os.path.exists(LOCAL_KEY_FILE):

@@ -1,18 +1,20 @@
+import asyncio
 import time
 import math
 from controller import PynputMouseKeyboardController
 
-
-# --- 2. App 类 (灵敏度调整为 2x) ---
-# --- 2. App 类 (修改核心算法) ---
+# --- 2. App 类 (还原为线性算法) ---
 class App(PynputMouseKeyboardController):
     def __init__(
-        self, sensitivity: float = 50.0, dead_zone: float = 0.05, scale: float = 1.0
+        self,
+        sensitivity: float = 300.0,
+        scale: float = 0.1,
+        dead_zone: float = 0.05
     ):
         super().__init__()
-        self.sensitivity = sensitivity  # 提高基础灵敏度
+        self.sensitivity = sensitivity
         self.scale = scale
-        self.dead_zone = dead_zone  # 降低死区
+        self.dead_zone = dead_zone
         self._last_alpha = None
         self._last_beta = None
         self._pending_x = 0.0
@@ -40,21 +42,9 @@ class App(PynputMouseKeyboardController):
         if abs(d_beta) < self.dead_zone:
             d_beta = 0
 
-        # --- 核心修改：平方项趋势 ---
-        # 公式：output = sign(d) * (|d|)^2 * sensitivity
-        # 效果：小移动更小(精准)，大移动更大(快速)
-
-        # 计算 X 轴位移
-        if d_alpha != 0:
-            # d_alpha * abs(d_alpha) 相当于保留了符号的平方 (d^2)
-            # 这样就不需要单独调用 sign() 函数了
-            processed_alpha = d_alpha * abs(d_alpha)
-            self._pending_x += -processed_alpha * self.sensitivity
-
-        # 计算 Y 轴位移
-        if d_beta != 0:
-            processed_beta = d_beta * abs(d_beta)
-            self._pending_y += -processed_beta * self.sensitivity
+        # 线性位移计算
+        self._pending_x += -d_alpha * self.sensitivity
+        self._pending_y += -d_beta * self.sensitivity
 
         self.update_mouse()
 
@@ -68,3 +58,30 @@ class App(PynputMouseKeyboardController):
             self.move_mouse(dx, dy)
             self._pending_x -= dx / self.scale
             self._pending_y -= dy / self.scale
+
+
+app = App()
+
+
+def get_data(x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    app.update_data(x, y, z, alpha, beta, gamma)
+
+
+def mouse_event(message: str):
+    app.click_mouse(message)
+
+
+def text_event(message: str):
+    app.paste_text(message)
+
+
+def key_event(message: str):
+    app.tap_key(message)
+
+
+def key_down(key: str):
+    app.key_down(key)
+
+
+def key_up(key: str):
+    app.key_up(key)

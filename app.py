@@ -44,7 +44,7 @@ class App(PynputMouseKeyboardController):
 
         # 线性位移计算
         self._pending_x += -d_alpha * self.sensitivity
-        self._pending_y += -d_beta * self.sensitivity
+        self._pending_y += d_beta * self.sensitivity
 
         self.update_mouse()
 

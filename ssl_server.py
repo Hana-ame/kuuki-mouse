@@ -125,50 +125,28 @@ class FileHandler(http.server.SimpleHTTPRequestHandler):
 
 # --- 证书下载逻辑 ---
 def download_certs_via_scp():
-    """使用 SCP 从远程服务器下载证书文件。"""
+    """使用 SSH cat 从远程服务器下载证书文件。"""
     print(f"正在从 {CERT_SOURCE_SERVER} 下载证书...")
-
-    # 构建远程文件路径
-    # 使用引号包裹路径，以支持通配符 * 或特殊字符
-    remote_key_path = f":{REMOTE_CERT_DIR}/{REMOTE_KEY_FILE}"
-    remote_cert_path = f":{REMOTE_CERT_DIR}/{REMOTE_CERT_FILE}"
-
     try:
-        # 下载私钥
-        # 命令格式: scp user@host:'/path/to/file' ./local_file
-        key_cmd = [
-            "scp",
-            "-o",
-            "StrictHostKeyChecking=no",
-            f"{CERT_SOURCE_SERVER}{remote_key_path}",
-            LOCAL_KEY_FILE,
-        ]
-        print(f"执行命令: {' '.join(key_cmd)}")
-        subprocess.run(key_cmd, check=True)
-
-        # 下载证书链
-        cert_cmd = [
-            "scp",
-            "-o",
-            "StrictHostKeyChecking=no",
-            f"{CERT_SOURCE_SERVER}{remote_cert_path}",
-            LOCAL_CERT_FILE,
-        ]
-        print(f"执行命令: {' '.join(cert_cmd)}")
-        subprocess.run(cert_cmd, check=True)
-
-        print("证书下载成功。")
-        return True
-
-    except subprocess.CalledProcessError as e:
-        print(f"证书下载失败: {e}")
-        print("请检查:")
-        print(f"1. CERT_SOURCE_SERVER ('{CERT_SOURCE_SERVER}') 是否正确且可达?")
-        print(f"2. SSH Key (id_rsa) 是否已加载 (ssh-add -l)?")
-        print(f"3. 远程路径 '{REMOTE_CERT_DIR}' 是否存在?")
-        return False
+        key_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'cat {REMOTE_CERT_DIR}/{REMOTE_KEY_FILE}' > {LOCAL_KEY_FILE}"
+        cert_cmd = f"ssh -o StrictHostKeyChecking=no {CERT_SOURCE_SERVER} 'cat {REMOTE_CERT_DIR}/{REMOTE_CERT_FILE}' > {LOCAL_CERT_FILE}"
+        
+        print(f"执行命令获取私钥...")
+        subprocess.run(key_cmd, shell=True, check=True)
+        
+        print(f"执行命令获取证书...")
+        subprocess.run(cert_cmd, shell=True, check=True)
+        
+        import os
+        if os.path.exists(LOCAL_KEY_FILE) and os.path.getsize(LOCAL_KEY_FILE) > 0:
+            print("证书下载成功。")
+            return True
+        else:
+            print("证书下载失败：文件为空或不存在。")
+            return False
+            
     except Exception as e:
-        print(f"发生未知错误: {e}")
+        print(f"证书下载发生错误: {e}")
         return False
 
 

@@ -215,9 +215,8 @@
     <div class="keyboard-container">
         <!-- 页面内容保持不变，略... -->
         <div id="page-main" class="page active">
-            <div class="row" style="flex: 0.7;">
+            <div class="row" style="flex: 0.6; padding: 0 5%;">
                 <button class="key key-modifier" data-key="Control">Ctrl</button>
-                <button class="key key-modifier" data-key="Shift">Shift</button>
                 <button class="key key-modifier" data-key="Alt">Alt</button>
                 <button class="key key-modifier" data-key="Meta">Win</button>
                 <button class="key key-func" data-key="Escape">Esc</button>
@@ -229,23 +228,24 @@
                 <button class="key" data-key="u">U</button><button class="key" data-key="i">I</button><button class="key" data-key="o">O</button>
                 <button class="key" data-key="p">P</button>
             </div>
-            <div class="row">
+            <div class="row" style="padding: 0 5%;">
                 <button class="key" data-key="a">A</button><button class="key" data-key="s">S</button><button class="key" data-key="d">D</button>
                 <button class="key" data-key="f">F</button><button class="key" data-key="g">G</button><button class="key" data-key="h">H</button>
                 <button class="key" data-key="j">J</button><button class="key" data-key="k">K</button><button class="key" data-key="l">L</button>
             </div>
             <div class="row">
+                <button class="key key-modifier key-wide" data-key="Shift">⇧</button>
                 <button class="key" data-key="z">Z</button><button class="key" data-key="x">X</button><button class="key" data-key="c">C</button>
                 <button class="key" data-key="v">V</button><button class="key" data-key="b">B</button><button class="key" data-key="n">N</button>
                 <button class="key" data-key="m">M</button>
                 <button class="key key-func key-wide" data-key="Backspace">⌫</button>
             </div>
             <div class="row">
-                <button class="key key-func" data-action="toggle-symbol">符</button>
-                <button class="key key-func" data-key=",">，</button>
+                <button class="key key-func key-wide" data-action="toggle-symbol" id="btnToggleSymbol">?123</button>
+                <button class="key key-func" data-key=",">,</button>
                 <button class="key key-space" data-key=" ">空格</button>
-                <button class="key key-func" data-key=".">。</button>
-                <button class="key key-action" data-key="Enter">↵</button>
+                <button class="key key-func" data-key=".">.</button>
+                <button class="key key-action key-wide" data-key="Enter">↵</button>
             </div>
         </div>
 
@@ -424,7 +424,12 @@
                 if (!keyBtn) return;
                 keyBtn.style.background = '#555';
 
-                if (keyBtn.dataset.action === 'toggle-symbol') { isSymbolMode = !isSymbolMode; renderNumRow(); return; }
+                if (keyBtn.dataset.action === 'toggle-symbol') { 
+                    isSymbolMode = !isSymbolMode; 
+                    keyBtn.textContent = isSymbolMode ? 'ABC' : '?123';
+                    renderNumRow(); 
+                    return; 
+                }
                 if (keyBtn.dataset.action === 'toggle-main') { tabBtns[0].click(); return; }
 
                 const key = keyBtn.dataset.key;

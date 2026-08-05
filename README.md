@@ -104,8 +104,10 @@ pip 上的 peerjs-python (1.5.1) 是把 JS 版 PeerJS 直接翻译的移植版, 
 
 ### fork 来源与版本差别
 
-- **上游**: [peerjs-python](https://github.com/Phantom-Flash/peerjs-python) `1.5.1` (PyPI 包 `peerjs`),
+- **上游**: [peerjs-python](https://github.com/ambianic/peerjs-python) `1.5.1` (PyPI 包 `peerjs`),
   即 JS 版 [PeerJS](https://peerjs.com) 的 Python 移植。
+  来源经 PyPI 元数据核实: `home_page = github.com/ambianic/peerjs-python`, 作者 Ivelin Ivanov。
+  注意: 网上流传的 `Phantom-Flash/peerjs-python` 写法是错的, GitHub 上不存在; 请以 PyPI 元数据为准。
 - **获取方式**: 从 `pip install peerjs` 后的 `site-packages/peerjs/` 整体拷贝进仓库 (无 `__init__.py`, 是 namespace 包),
   共 11 个源文件 + `ext/http_proxy.py`, 未做删减。
 - **本地版本**: 在上游 1.5.1 基础上打了上面 7 处补丁 (全部与 Python 3.12 / 新版依赖库兼容性相关,

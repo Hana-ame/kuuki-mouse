@@ -42,19 +42,58 @@ python main.py            # 生成房间码 + 二维码, 开始运行
 
 ### 2. 发布手机页面到 GitHub Pages
 
-把 `web/` 目录内容作为 GitHub Pages 站点发布:
+本仓库已配置 **GitHub Actions 自动部署** (`.github/workflows/pages.yml`):
+每次 push 到 `master` 都会把 `web/` 目录自动部署到
+`https://<用户名>.github.io/<仓库名>/`。只需在仓库
+Settings → Pages → Build and deployment → Source 选 **GitHub Actions** 一次。
 
-- 方式 A (推荐): 把 `web/` 推到仓库根目录或 `gh-pages` 分支, 在仓库 Settings → Pages 里选择分支。
-- 方式 B: 任何静态托管 (Vercel/Netlify/自己的服务器) 都行, 只要 HTTPS + 能访问 unpkg CDN。
+手动/其他托管 (Vercel/Netlify/任意静态站) 也行, 只要 HTTPS + 能访问 unpkg CDN。
 
 ### 3. 配对
 
 手机扫 PC 端二维码 → 打开页面 → 自动连接 (或手动输入房间码点「开始配对」)。
-连接成功后手机会把传感器数据发到 PC, 手机即变身空气鼠标:
+连接成功后手机会把传感器数据发到 PC, 手机即变身空气鼠标。
 
-- **校准**: 点「校准姿态」把当前朝向设为零点 (此时鼠标不动)
-- **左键**: 点「左键」大按钮
-- **文字输入**: 文本框输入回车发送; 空文本框按 Backspace = 键盘退格
+**激光笔式用法**:
+
+1. **校准**: 手机对准屏幕中央方向, 点「校准姿态」——把**当前指向方向设为屏幕中心**。
+2. **移动**: 手机指向哪, 光标就到哪 (绝对定位)。长轴**上下抬** = 光标上下, **左右转** = 光标左右。
+3. **左键**: 点「左键」大按钮。
+4. **文字输入**: 文本框输入回车发送 (空文本框回车 = 发回车键; 空文本框退格 = 退格键)。
+
+> 手势不稳/换手后, 重新点一次「校准姿态」即可。
+
+## 算法: 激光笔式绝对定位
+
+鼠标定位采用你指定的坐标系定义 (`app.py`):
+
+```
+Y (屏幕高度) = 手机长轴指向方向 与 地面 的夹角          (俯仰, 上抬→光标上移)
+X (屏幕左右) = 指向方向 相对 校准基准铅垂面的左右偏角   (偏航, 右转→光标右移)
+
+光标位置 = 屏幕中心 + (偏角 × px/度), 指向哪光标就到哪 (绝对定位)
+```
+
+- **姿态解算**: 保留 Mahony 陀螺积分 (加速度计+陀螺融合, `attitude.py`),
+  长轴俯仰 (与地面夹角) 由四元数姿态的 `+y 轴`(竖屏长边) 世界系分量算出 —— 重力融合, 不漂移。
+- **偏航来源**: 直接用 `deviceorientation` 的绝对 `alpha` (磁力计定航向),
+  **不用陀螺积分的偏航** —— 避免陀螺零偏导致的静止漂移 (这是之前版本"静止还在滑"的病根)。
+- **抗抖动**: 中心死区 (小角度偏差 → 光标锁定中心) + 目标位置低通平滑 + 单帧跳变保护。
+- **无惯性累积**: 手停下 → 指向不变 → 光标停住, 不滑行。
+
+### 调参 (`app.py` 顶部常量)
+
+| 常量 | 默认 | 作用 |
+|---|---|---|
+| `FULL_RANGE_X_DEG` | 90 | 左右 ±45° 覆盖整个屏宽, 越小越灵敏 |
+| `FULL_RANGE_Y_DEG` | 60 | 上下 ±30° 覆盖整个屏高, 越小越灵敏 |
+| `SMOOTHING` | 0.55 | 目标低通系数: 越大越稳(略滞后), 越小越跟手(略抖) |
+| `DEADZONE_DEG` | 0.5 | 中心死区(°), 抑制静止抖动 |
+| `JUMP_GUARD_DEG` | 90 | 单帧角度跳变阈值, 超此值丢帧 |
+| `kp` / `ki` | 0.5 / 0.1 | Mahony 比例/积分增益 |
+
+> 方向反了 (如上抬光标反而向下): 把 `update_data` 里 `ty = self._cy - d_el * self._gain_y`
+> 的 `-` 改成 `+` (或 `tx` 的 `+` 改 `-`) 即可。
 
 ## 消息协议 (JSON)
 
@@ -74,12 +113,13 @@ PeerJS DataConnection 必须用 `serialization: "json"` (Python 移植版的二�
 
 ```
 main.py          桌面端入口: 房间码 → 二维码 → PeerJS 主机 + MQTT 公告 → 鼠标控制
-app.py           姿态→鼠标逻辑 (Mahony 融合 → 前向向量 → 平滑/死区/跳变保护 → 鼠标)
+app.py           激光笔式绝对定位 (Mahony 陀螺积分 → 长轴俯仰/绝对偏航 → 死区/平滑/跳变保护 → 绝对定位)
 attitude.py      纯 Python 姿态解算 (my-node-app lib/attitude.js + motion/forward.js 的移植)
 controller.py    鼠标控制 (pynput 封装)
 peerjs/          peerjs-python 的 fork (含 py3.12 兼容补丁, 见下)
 web/             手机页面 (GitHub Pages 发布内容, 即旧 www/ 的替代)
 test_attitude.py 姿态解算单元测试 (port of verify-attitude.mjs)
+.github/workflows/pages.yml  push 到 master 自动部署 web/ → GitHub Pages
 ```
 
 旧的自托管文件 (`server.py` HTTPS 服务器、`cert.py`/`pull_cert.sh` 证书、`www/` 旧页面)

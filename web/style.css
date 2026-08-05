@@ -1,0 +1,39 @@
+/* kuuki-mouse 手机遥控页 (GitHub Pages) */
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; height: 100%; }
+body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0f1117; color: #e6e6e6; padding: 16px;
+    user-select: none; -webkit-user-select: none;
+}
+#app { max-width: 480px; margin: 0 auto; }
+header h1 { margin: 0 0 4px; font-size: 22px; }
+#status { color: #ffb454; margin: 0 0 16px; font-size: 14px; }
+
+.card {
+    background: #1b1f29; border: 1px solid #2a2f3a; border-radius: 12px;
+    padding: 16px; margin-bottom: 12px;
+}
+.hidden { display: none; }
+
+label { font-size: 13px; color: #9aa3b2; display: block; margin-bottom: 6px; }
+#roomInput {
+    width: 100%; padding: 12px; font-size: 18px; letter-spacing: 4px;
+    text-align: center; background: #0f1117; color: #fff;
+    border: 1px solid #2a2f3a; border-radius: 8px; margin-bottom: 10px;
+}
+
+button {
+    background: #3b82f6; color: #fff; border: none; border-radius: 10px;
+    padding: 14px; font-size: 16px; width: 100%; cursor: pointer;
+}
+button:active { filter: brightness(1.2); }
+button.big { padding: 20px; font-size: 18px; background: #16a34a; }
+.row { display: grid; grid-template-columns: 1fr 1.6fr; gap: 10px; margin-bottom: 10px; }
+
+#textInput {
+    width: 100%; padding: 12px; font-size: 15px; color: #fff;
+    background: #0f1117; border: 1px solid #2a2f3a; border-radius: 8px;
+}
+#sensors { font-size: 12px; color: #9aa3b2; line-height: 1.7; }
+#sensors span { color: #7dd3fc; }

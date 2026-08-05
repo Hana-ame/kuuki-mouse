@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>kuuki-mouse 手机遥控</title>
+    <link rel="stylesheet" href="style.css">
+    <script nomodule>document.documentElement.classList.add('no-module');</script>
+</head>
+<body>
+    <div id="app">
+        <header>
+            <h1>kuuki-mouse</h1>
+            <p id="status">未配对</p>
+        </header>
+
+        <section id="pair" class="card">
+            <label for="roomInput">房间码</label>
+            <input id="roomInput" placeholder="ABCDE" autocomplete="off" autocapitalize="characters" maxlength="8">
+            <button id="pairBtn">开始配对</button>
+        </section>
+
+        <section id="control" class="card hidden">
+            <div class="row">
+                <button id="calibrateBtn">校准姿态</button>
+                <button id="clickBtn" class="big">左键 (点这里)</button>
+            </div>
+            <input id="textInput" placeholder="输入文字, 回车发送" autocomplete="off">
+        </section>
+
+        <section id="sensors" class="card hidden">
+            <div>加速度(含重力): <span id="accel">-</span></div>
+            <div>姿态(αβγ): <span id="orient">-</span></div>
+            <div>角速度(rad/s): <span id="rot">-</span></div>
+            <div>通道: <span id="chan">-</span></div>
+        </section>
+    </div>
+
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+    <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>

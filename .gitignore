@@ -1,4 +1,5 @@
 *.pem
+pair_*.png
 
 __pycache__
 dist

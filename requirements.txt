@@ -1,9 +1,27 @@
-# pip install -r requirements.txt
+# kuuki-mouse 依赖
+#
+# 姿态解算 (attitude.py): 纯标准库, 无额外依赖。
+#
+# 配对/传输 (全部走公开服务, 不自己 host):
+#   - peerjs: 连接公开 cloud broker (0.peerjs.com), WebRTC 数据通道
+#             -> 已 fork 到项目 peerjs/ 目录 (含 py3.12 兼容补丁), 无需 pip 安装
+#   - paho-mqtt: 连接公开 broker (broker.hivemq.com, 与 my-node-app 同款), 房间公告 + 兜底通道
+#   - qrcode: 生成配对二维码
+#
+# 安装: pip install -r requirements.txt
 
-websockets==12.0
-cryptography
-# grpcio
-# grpcio-tools
-pynput
+paho-mqtt>=2.0
+qrcode>=8.0
 
-pyinstaller
+# --- peerjs fork (peerjs/ 目录) 的运行时依赖 ---
+# peerjs 的 pip 元数据已被 fork 消除, 这里只需它用于连 cloud broker 的,
+# 以及 fork 里自己的依赖。
+#
+# 无需 --no-deps, 已刻意避开版本冲突:
+#   - fork 用 `from pyee.asyncio import AsyncIOEventEmitter`, 兼容 aiortc 要求的 pyee>=13
+#   - av>=14 (aiortc 1.11+ 不在限制 <14; 8.x 在 py3.12 无 wheel 会编译失败)
+aiortc>=1.11
+av>=14.0
+pyee>=13
+dataclasses-json
+loguru

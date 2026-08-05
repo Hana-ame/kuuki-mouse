@@ -44,32 +44,18 @@ def gen_room_code() -> str:
     return "".join(ROOM_ALPHABET[b % len(ROOM_ALPHABET)] for b in os.urandom(ROOM_LEN))
 
 
-def open_png(png: str) -> None:
-    """尝试打开二维码图片 (必须非阻塞, 否则会被 snap firefox / xdg-open 卡住)。"""
-    import subprocess
-    if sys.platform.startswith("win"):
-        subprocess.Popen(["cmd", "/c", "start", "", png])
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", png])
-    else:
-        subprocess.Popen(
-            ["xdg-open", png],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
-
 def show_qr(url: str, room: str) -> None:
-    """在终端打印二维码并保存 PNG + 尝试打开图片, 供手机扫码。"""
+    """在终端打印二维码并保存 PNG, 输出文件路径(由用户自行打开)。"""
     qr = qrcode.QRCode(border=2, box_size=8)
     qr.add_data(url)
     qr.make(fit=True)
 
     png = f"pair_{room}.png"
     try:
+        import pathlib
         qr.make_image().save(png)
-        print(f"已保存: {png}", flush=True)
-        open_png(png)
+        abs_png = pathlib.Path(png).resolve()
+        print(f"二维码图片已保存: {abs_png}  (自行打开此文件扫码)", flush=True)
     except Exception as e:
         # 缺 Pillow 等情况: 不影响配对, 终端二维码仍可用
         print(f"(二维码 PNG 保存失败: {e} — 不影响使用)", flush=True)
@@ -78,7 +64,8 @@ def show_qr(url: str, room: str) -> None:
     print(f"房间码: {room}", flush=True)
     print(f"二维码内容: {url}", flush=True)
     try:
-        qr.print_ascii(tty=True)
+        # tty=True 会输出 ANSI 颜色码, Windows PowerShell 显示为乱码, 所以用 tty=False
+        qr.print_ascii(tty=False)
     except Exception:
         pass
     print("================================", flush=True)

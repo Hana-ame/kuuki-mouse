@@ -36,7 +36,8 @@ python main.py            # 生成房间码 + 二维码, 开始运行
 > 它的依赖 (`aiortc` + `pyee` + `av`) 已在 requirements 里, 且已避开版本冲突,
 > 直接 `pip install -r requirements.txt` 即可, 不用 `--no-deps`。
 
-首次运行会在终端打印 ASCII 二维码, 并保存 `pair_<房间码>.png` (同时尝试自动打开)。
+首次运行会在终端打印 ASCII 二维码, 并把二维码 PNG 保存到 `pair_<房间码>.png`
+(终端会打印完整路径, 自行打开该文件用手机扫码)。
 
 > 注意: `main.py` 顶部 `PAGE_URL` 需要改成你的 GitHub Pages 地址, 二维码才指向正确的页面。
 

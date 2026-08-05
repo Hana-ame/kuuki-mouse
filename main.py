@@ -44,6 +44,21 @@ def gen_room_code() -> str:
     return "".join(ROOM_ALPHABET[b % len(ROOM_ALPHABET)] for b in os.urandom(ROOM_LEN))
 
 
+def open_png(png: str) -> None:
+    """尝试打开二维码图片 (必须非阻塞, 否则会被 snap firefox / xdg-open 卡住)。"""
+    import subprocess
+    if sys.platform.startswith("win"):
+        subprocess.Popen(["cmd", "/c", "start", "", png])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", png])
+    else:
+        subprocess.Popen(
+            ["xdg-open", png],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+
 def show_qr(url: str, room: str) -> None:
     """在终端打印二维码并保存 PNG + 尝试打开图片, 供手机扫码。"""
     qr = qrcode.QRCode(border=2, box_size=8)
@@ -51,30 +66,22 @@ def show_qr(url: str, room: str) -> None:
     qr.make(fit=True)
 
     png = f"pair_{room}.png"
-    qr.make_image().save(png)
-    print("\n========== 手机配对 ==========")
-    print(f"房间码: {room}")
-    print(f"二维码内容: {url}")
-    print(f"已保存: {png}")
+    try:
+        qr.make_image().save(png)
+        print(f"已保存: {png}", flush=True)
+        open_png(png)
+    except Exception as e:
+        # 缺 Pillow 等情况: 不影响配对, 终端二维码仍可用
+        print(f"(二维码 PNG 保存失败: {e} — 不影响使用)", flush=True)
+
+    print("\n========== 手机配对 ==========", flush=True)
+    print(f"房间码: {room}", flush=True)
+    print(f"二维码内容: {url}", flush=True)
     try:
         qr.print_ascii(tty=True)
     except Exception:
         pass
-    try:  # 尝试打开二维码图片 (必须非阻塞, 否则会被 snap firefox / xdg-open 卡住)
-        import subprocess
-        if sys.platform.startswith("win"):
-            subprocess.Popen(["cmd", "/c", "start", "", png])
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", png])
-        else:
-            subprocess.Popen(
-                ["xdg-open", png],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-    except Exception:
-        pass
-    print("================================")
+    print("================================", flush=True)
 
 
 # ---------------- 主流程 ----------------

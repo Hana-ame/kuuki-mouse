@@ -12,6 +12,8 @@
 
 paho-mqtt>=2.0
 qrcode>=8.0
+pynput>=1.7      # 鼠标/键盘控制 (controller.py)
+Pillow>=10.0     # qrcode 生成 PNG (qr.make_image 需要 PIL)
 
 # --- peerjs fork (peerjs/ 目录) 的运行时依赖 ---
 # peerjs 的 pip 元数据已被 fork 消除, 这里只需它用于连 cloud broker 的,

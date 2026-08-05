@@ -33,7 +33,7 @@ PEER_PREFIX = "kuuki-mouse"                # PeerJS id 前缀, 完整 id = f"{PE
 MQTT_HOST = "broker.hivemq.com"            # HiveMQ 公共 broker (my-node-app 用同款服务)
 MQTT_PORT = 1883
 MQTT_ROOT = "kuuki-mouse"                  # MQTT topic 根
-PAGE_URL = "https://YOUR-USER.github.io/kuuki-mouse/"   # TODO: 部署 GitHub Pages 后改成你的实际地址
+PAGE_URL = "https://hana-ame.github.io/kuuki-mouse/"   # GitHub Pages 实际地址 (部署 web/ 后生效)
 
 ROOM_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # 去掉易混淆字符, 与 my-node-app 同款
 ROOM_LEN = 5

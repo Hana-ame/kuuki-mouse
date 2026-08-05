@@ -230,6 +230,8 @@ def handle_message(msg: dict) -> bool:
         )
     elif t == "mouse":
         mouse_event(msg.get("button", "left"))
+    elif t == "scroll":
+        app.scroll_mouse(int(msg.get("delta", 0)))
     elif t == "text":
         text_event(msg.get("text", ""))
     elif t == "key":

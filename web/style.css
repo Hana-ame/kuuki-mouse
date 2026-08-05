@@ -30,13 +30,23 @@ button {
 button:active { filter: brightness(1.2); }
 button.big { padding: 20px; font-size: 18px; background: #16a34a; }
 .row { display: grid; grid-template-columns: 1fr 1.6fr; gap: 10px; margin-bottom: 10px; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.row3 { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+#modeBtn { background: #7c3aed; }
 
-#textInput {
-    width: 100%; padding: 12px; font-size: 15px; color: #fff;
+#inputArea textarea {
+    width: 100%; padding: 12px; font-size: 16px; color: #fff;
     background: #0f1117; border: 1px solid #2a2f3a; border-radius: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 10px; resize: vertical; font-family: inherit;
 }
-button.send { padding: 10px; font-size: 15px; background: #2563eb; }
+.kbd-row { display: flex; gap: 5px; margin-bottom: 6px; }
+.kbd-row .key {
+    flex: 1; min-width: 0; padding: 12px 0; font-size: 15px;
+    border-radius: 8px; background: #262b36; color: #e6e6e6;
+}
+.kbd-row .key:active { filter: brightness(1.35); }
+.kbd-row .key-fn { background: #334155; }
+.kbd-row .key-space { flex: 5; background: #334155; }
 
 #sensors { font-size: 12px; color: #9aa3b2; line-height: 1.7; }
 #sensors span { color: #7dd3fc; }

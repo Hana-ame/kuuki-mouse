@@ -74,3 +74,7 @@ class PynputMouseController:
         """按一下键盘上的键 (特殊键或普通字符)。"""
         key = PynputMouseController.special_keys.get(key.lower(), key.lower())
         self.keyboard.tap(key)
+
+    def scroll_mouse(self, delta: int):
+        """滚动鼠标滚轮。delta>0 向上滚, delta<0 向下滚。"""
+        self.mouse.scroll(0, int(delta))

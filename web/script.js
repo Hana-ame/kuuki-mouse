@@ -58,6 +58,9 @@
     let peer = null;
     let mqttc = null;
     let sendViaPeer = false;
+    let inputMode = false;   // 输入模式: 禁用鼠标移动 (不发送传感器帧)
+    let sentLen = 0;         // 文本框已发送长度
+    let shiftOn = false;     // 屏幕键盘 Shift
 
     function send(msg) {
         const now = performance.now();
@@ -72,6 +75,7 @@
         }
     }
     function sendSensor() {
+        if (inputMode) return;   // 输入时禁用鼠标移动
         if (!room) return;
         send({ t: 'sensor', ...accel, ...orient, ...rot });
     }
@@ -128,31 +132,101 @@
 
     // ---------------- 控件 ----------------
     function sendControl(obj) { send({ ...obj }); }
-    $('clickBtn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        sendControl({ t: 'mouse', button: 'left' });
-    });
+
+    function setInputMode(on) {
+        inputMode = on;
+        $('inputArea').classList.toggle('hidden', !on);
+        $('modeBtn').textContent = on ? '🖱 鼠标' : '✍ 输入';
+        $('status').textContent = on
+            ? '输入模式: 鼠标移动已禁用, 打字直接进电脑'
+            : (sendViaPeer ? `已连接房间 ${room} (PeerJS)` : '配对成功');
+        if (!on) $('textInput').blur();
+    }
+
     $('calibrateBtn').addEventListener('click', () => {
+        setInputMode(false);
         sendControl({ t: 'calibrate' });
-        statusEl.textContent = '已发送校准';
+        $('status').textContent = '已发送校准';
     });
+    $('modeBtn').addEventListener('click', () => {
+        if (inputMode) setInputMode(false);
+        else { setInputMode(true); $('textInput').focus(); }
+    });
+
+    // 鼠标按键: 左/中/右 + 滚轮上下
+    $('clickBtn').addEventListener('click', () => { setInputMode(false); sendControl({ t: 'mouse', button: 'left' }); });
+    $('midBtn').addEventListener('click', () => { setInputMode(false); sendControl({ t: 'mouse', button: 'middle' }); });
+    $('rightBtn').addEventListener('click', () => { setInputMode(false); sendControl({ t: 'mouse', button: 'right' }); });
+    $('wheelUpBtn').addEventListener('click', () => { setInputMode(false); sendControl({ t: 'scroll', delta: 1 }); });
+    $('wheelDownBtn').addEventListener('click', () => { setInputMode(false); sendControl({ t: 'scroll', delta: -1 }); });
+
+    // 输入模式: 文本框聚焦进入, 失焦(焦点离开输入区)退出
+    $('textInput').addEventListener('focus', () => setInputMode(true));
+    $('textInput').addEventListener('blur', () => {
+        setTimeout(() => {
+            const act = document.activeElement;
+            if (!act || !$('inputArea').contains(act)) setInputMode(false);
+        }, 0);
+    });
+
+    // 检测到任何字符 -> 立即发送 (拼音组合完成 / 普通按键输入都触发)
+    function flushText() {
+        const v = $('textInput').value;
+        if (v.length > sentLen) {
+            const newText = v.slice(sentLen);
+            if (newText) sendControl({ t: 'text', text: newText });
+        }
+        sentLen = v.length;
+    }
+    $('textInput').addEventListener('input', (e) => { if (!e.isComposing) flushText(); });
+    $('textInput').addEventListener('compositionend', flushText);
     $('textInput').addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
+        if (e.key === 'Backspace' && $('textInput').value === '') {
             e.preventDefault();
-            sendText();
-        } else if (e.key === 'Backspace' && $('textInput').value === '') {
-            e.preventDefault();
-            sendControl({ t: 'key', key: 'Backspace' });
+            sendControl({ t: 'key', key: 'Backspace' });   // 空框退格 = PC 退格
         }
     });
-    $('sendBtn').addEventListener('click', sendText);
 
-    function sendText() {
-        const v = $('textInput').value;
-        if (!v) { sendControl({ t: 'key', key: 'Enter' }); return; }  // 空则发回车
-        sendControl({ t: 'text', text: v });
-        $('textInput').value = '';
+    // 屏幕全键盘: 点键立即发送
+    const KB_ROWS = [
+        ['1','2','3','4','5','6','7','8','9','0','-','=','⌫'],
+        ['q','w','e','r','t','y','u','i','o','p','[',']','\\'],
+        ['a','s','d','f','g','h','j','k','l',';',"'",'⏎'],
+        ['⇧','z','x','c','v','b','n','m',',','.','/','⇥'],
+        ['空格'],
+    ];
+    const KB_SPECIAL = { '⌫': 'Backspace', '⏎': 'Enter', '⇥': 'Tab', '空格': 'Space' };
+    function kbLabel(k) { return (shiftOn && /^[a-z]$/.test(k)) ? k.toUpperCase() : k; }
+    function kbRender() {
+        document.querySelectorAll('#keyboard .key').forEach((b) => { b.textContent = kbLabel(b.dataset.raw); });
     }
+    function buildKeyboard() {
+        const kb = $('keyboard');
+        KB_ROWS.forEach((row) => {
+            const r = document.createElement('div');
+            r.className = 'kbd-row';
+            row.forEach((k) => {
+                const b = document.createElement('button');
+                b.className = 'key';
+                if (KB_SPECIAL[k] || k === '⇧') b.classList.add('key-fn');
+                if (k === '空格') b.classList.add('key-space');
+                b.dataset.raw = k;
+                b.addEventListener('click', () => {
+                    setInputMode(true);
+                    if (KB_SPECIAL[k]) sendControl({ t: 'key', key: KB_SPECIAL[k] });
+                    else if (k === '⇧') { shiftOn = !shiftOn; kbRender(); }
+                    else {
+                        sendControl({ t: 'text', text: kbLabel(k) });
+                        if (shiftOn && /^[a-z]$/.test(k)) { shiftOn = false; kbRender(); }
+                    }
+                });
+                r.appendChild(b);
+            });
+            kb.appendChild(r);
+        });
+        kbRender();
+    }
+    buildKeyboard();
 
     // ---------------- 权限 + 启动 ----------------
     async function requestPermission() {

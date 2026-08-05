@@ -1,19 +1,23 @@
-# 空气鼠标主逻辑 (激光笔式绝对定位)
+# 空气鼠标主逻辑
 #
-# 定位方式 (用户指定):
-#   Y (屏幕高度) = 手机长轴指向方向 与 地面 的夹角 (俯仰)
-#   X (屏幕左右) = 指向方向 相对 校准基准铅垂面(指向屏幕方向) 的左右偏角 (偏航)
+# 设计 (按你的坐标系定义 + 可用的物理信号):
+#   Y (上下) = 手机长轴指向方向 与 地面 的夹角          (俯仰)
+#   X (左右) = 指向方向 相对 校准基准铅垂面 的左右偏角 (偏航)
 #
-#   校准(calibrate): 把当前指向方向定为屏幕中心 -> 之后"指向哪, 光标到哪"。
+# 信号源 (关键, 别再踩之前的坑):
+#   - 两个角都从 Mahony 陀螺积分四元数解出 (姿态解算保留, attitude.py)。
+#     陀螺短时间积分平滑、无磁罗盘跳变。
+#   - **不用** deviceorientation 的绝对 alpha (磁力计罗盘) 直接驱动:
+#     罗盘在室内受磁场干扰会自己漂移/跳变, 手机静止 alpha 也在变,
+#     之前"静止还在飘"就是它造成的。
 #
-# 姿态来源:
-#   - 保留 Mahony 陀螺积分 (姿态解算, attitude.py), 用加速度计+陀螺融合,
-#     长轴的俯仰(与地面夹角)从这里算, 重力融合 -> 稳定不漂移。
-#   - 偏航(左右)用 deviceorientation 的绝对 alpha (磁力计定航向, 绝对不漂移),
-#     避免陀螺积分偏航漂移。
+# 抗漂移核心 — 静止冻结 (stillness freeze):
+#   - 用陀螺转速 |gx,gy,gz| (静止时≈0, 不受磁场影响) 判断手机是否真在动。
+#   - 持续静止 120ms -> 光标冻结在原地, 并把角度基准重锚定到当前值。
+#     => 手不动: 光标绝对不动 (不管罗盘/噪声怎么变);
+#        手再动: 从冻结点开始按角度差移动, 漂移永远无法累积。
 #
-# 抗抖动: 死区(中心附近小角度不动) + 目标位置低通平滑 + 跳变保护。
-# 无惯性累积: 手停下 -> 指向不变 -> 光标停在原地。
+# 驱动方式: 相对角度变化 (v = 角度差 * 增益), 无惯性, 静止即停。
 
 import math
 import sys
@@ -28,11 +32,14 @@ from attitude import (
     normalize3,
 )
 
-JUMP_GUARD_DEG = 90.0   # 单帧角度跳变超过此值视为传感器毛刺, 丢弃该帧
-DEADZONE_DEG = 0.5      # 中心附近死区(°): 指向偏差小于此 -> 光标锁定中心
-SMOOTHING = 0.55        # 目标位置低通系数 (0~1): 越大越平滑(略滞后), 越小越跟手
-FULL_RANGE_X_DEG = 90.0  # 左右 ±45° 覆盖整个屏宽
+JUMP_GUARD_DEG = 90.0   # 单帧角度跳变超过此值: 视为毛刺, 重锚定基准 (光标不跳)
+DEADZONE_DEG = 0.15     # 角度差死区(°): 小于此的微小变化忽略
+SMOOTHING = 0.15        # 光标低通系数 (0~1): 越小越跟手, 越大越稳
+FULL_RANGE_X_DEG = 90.0  # 左右 ±45° 覆盖整个屏宽 (增益 = 屏宽/此值)
 FULL_RANGE_Y_DEG = 60.0  # 上下 ±30° 覆盖整个屏高
+
+STILL_GYRO_RAD_S = 0.06  # 静止判定: 陀螺转速低于此 (rad/s, ≈3.4°/s)
+STILL_TIME_S = 0.12      # 持续静止多久才冻结 (秒)
 
 
 class App(PynputMouseController):
@@ -47,23 +54,24 @@ class App(PynputMouseController):
         self._inited = False
         self._last_ts = 0.0
 
-        # 屏幕尺寸 / 映射增益
+        # 屏幕尺寸 / 增益
         self._w, self._h = self._screen_size()
         self._cx, self._cy = self._w / 2, self._h / 2
         self._gain_x = self._w / FULL_RANGE_X_DEG   # px/度
         self._gain_y = self._h / FULL_RANGE_Y_DEG
 
-        # 校准基准 (指向屏幕中心的方向)
-        self._ref_az = None   # 基准偏航 (绝对 alpha)
-        self._ref_el = None   # 基准俯仰 (长轴与地面夹角)
-
-        # 当前指向
+        # 角度基准 (相对模式, 静止时重锚定)
+        self._ref_az = None
+        self._ref_el = None
         self._last_az = None
         self._last_el = None
 
-        # 平滑后的光标位置 (绝对坐标)
-        self._sx = self._cx
-        self._sy = self._cy
+        # 光标位置 (低通平滑)
+        self._sx, self._sy = self._cx, self._cy
+
+        # 静止检测
+        self._still_since = None
+        self._frozen = False
 
     # ---- 屏幕 ----
     def _screen_size(self):
@@ -93,22 +101,19 @@ class App(PynputMouseController):
         """手机长轴 (+y, 竖屏长边) 在世界系中的方向 = q ⊗ (0,1,0)。"""
         return normalize3(q_rotate(self.mah.q, {'x': 0, 'y': 1, 'z': 0}))
 
-    def _pitch_deg(self):
-        """长轴指向方向 与地面(水平面) 的夹角, 度 (上正下负)。"""
+    def _angles(self):
+        """长轴指向 -> (偏航 az, 俯仰 el) 度。az: 水平投影角(相对世界); el: 与地面夹角。"""
         v = self._long_axis_world()
-        return math.degrees(math.asin(max(-1, min(1, v['z']))))
-
-    def _yaw_deg(self, alpha: float) -> float:
-        """左右偏航 = deviceorientation 的绝对 alpha (磁力计, 无陀螺漂移)。"""
-        return float(alpha)
+        el = math.degrees(math.asin(max(-1, min(1, v['z']))))
+        az = math.degrees(math.atan2(v['x'], v['y']))
+        return az, el
 
     # ---- 校准 ----
     def calibrate(self):
-        """把当前指向方向设为屏幕中心。"""
+        """校准: 当前指向方向设为基准, 光标回到屏幕中心。"""
         if self._last_az is not None and self._last_el is not None:
             self._ref_az = self._last_az
             self._ref_el = self._last_el
-        # 光标回屏幕中心
         self._sx, self._sy = self._cx, self._cy
         try:
             self.mouse.position = (int(self._cx), int(self._cy))
@@ -128,45 +133,58 @@ class App(PynputMouseController):
 
         accel = {'x': x, 'y': y, 'z': z}
         gyro = {'x': float(gx or 0), 'y': float(gy or 0), 'z': float(gz or 0)}
+        gyro_mag = math.hypot(gyro['x'], gyro['y'], gyro['z'])
 
         if not self._inited:
             self.mah.set_orientation(quat_from_accel(accel, 0))
             self._inited = True
-            self._last_az = self._yaw_deg(alpha)
-            self._last_el = self._pitch_deg()
+            self._last_az, self._last_el = self._angles()
+            self._ref_az, self._ref_el = self._last_az, self._last_el
             return
 
         # Mahony 融合 (保留陀螺积分)
         self.mah.update(dt, gyro, accel)
 
-        az = self._yaw_deg(alpha)
-        el = self._pitch_deg()
+        az, el = self._angles()
         self._last_az, self._last_el = az, el
 
+        # ---- 静止冻结: 手不动 -> 光标绝对不动 + 重锚定基准 (消除一切漂移) ----
+        if gyro_mag < STILL_GYRO_RAD_S:
+            if self._still_since is None:
+                self._still_since = now
+            if now - self._still_since >= STILL_TIME_S:
+                self._frozen = True
+                self._ref_az, self._ref_el = az, el   # 重锚定 -> 漂移无法累积
+                return                                # 光标不动
+        else:
+            self._still_since = None
+            self._frozen = False
+
         if self._ref_az is None:
-            self.calibrate()   # 首帧定基准
+            self._ref_az, self._ref_el = az, el
             return
 
-        d_az = wrap_deg(az - self._ref_az)   # 左右偏角
-        d_el = el - self._ref_el             # 上下俯仰差 (无环绕)
+        d_az = wrap_deg(az - self._ref_az)
+        d_el = el - self._ref_el
 
-        # 跳变保护: 毛刺丢弃
+        # 跳变保护: 毛刺 -> 重锚定, 不跳光标
         if abs(d_az) > JUMP_GUARD_DEG or abs(d_el) > JUMP_GUARD_DEG:
+            self._ref_az, self._ref_el = az, el
             return
 
-        # 死区: 中心附近小角度 -> 光标锁定中心 (抑制抖动)
-        if abs(d_az) < DEADZONE_DEG and abs(d_el) < DEADZONE_DEG:
-            self._sx, self._sy = self._cx, self._cy
-            self.mouse.position = (int(self._cx), int(self._cy))
-            return
+        # 死区: 微小角度差忽略
+        if abs(d_az) < DEADZONE_DEG:
+            d_az = 0.0
+        if abs(d_el) < DEADZONE_DEG:
+            d_el = 0.0
 
-        # 绝对映射: 指向哪, 光标到哪
-        tx = self._cx + d_az * self._gain_x
-        ty = self._cy - d_el * self._gain_y
+        # 相对角度变化驱动 (无惯性)
+        tx = self._sx + d_az * self._gain_x
+        ty = self._sy - d_el * self._gain_y
         tx = max(0, min(self._w - 1, tx))
         ty = max(0, min(self._h - 1, ty))
 
-        # 目标位置低通平滑 (停手后光标收敛到目标, 不滑)
+        # 轻微低通 (Mahony 已平滑, 这里只是去残余抖动)
         self._sx = self._sx * SMOOTHING + tx * (1 - SMOOTHING)
         self._sy = self._sy * SMOOTHING + ty * (1 - SMOOTHING)
 
@@ -176,8 +194,7 @@ class App(PynputMouseController):
             pass
 
     def update_mouse(self):
-        # 绝对模式: 已在 update_data 里定位, 这里无需再动
-        pass
+        pass   # 已在 update_data 里定位
 
 
 app = App()
@@ -200,7 +217,7 @@ def text_event(message: str):
 def key_event(message: str):
     if message.lower() in ("calibrate", "c", "recenter"):
         app.calibrate()
-        print("已校准: 当前指向 = 屏幕中心 (激光笔模式)")
+        print("已校准: 当前指向设为基准, 光标回屏幕中心")
     else:
         app.tap_key(message)
 

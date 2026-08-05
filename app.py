@@ -7,7 +7,11 @@
 #     -> Mahony 互补滤波融合 -> 连续四元数 q (设备系->地球系)
 #     -> 屏幕法线(正前朝向) in 世界系 = q⊗(0,0,1)
 #     -> yaw(绕世界Z)/pitch(俯仰) 分解 (azimuth/elevation)
-#     -> 相对校准基准的方位差 -> 平滑/死区/跳变保护 -> 鼠标移动
+#     -> 相对校准基准的方位差 -> 死区/平滑(可选) -> 鼠标移动
+#
+# 鼠标驱动方式 (对齐重构前原版):
+#   v = 绝对角度的变化 * sensitivity, 每帧直接算, 默认不做速度惯性累积/低通飞轮,
+#   所以停住即停、不滑; 需要防抖时可开少量 smoothing (attenuation_coefficient>0)。
 #
 # 与旧实现的区别:
 #   旧 app.py 直接用原始欧拉角差分 (alpha - prev_alpha), 有万向锁、跳变、无融合。
@@ -31,9 +35,10 @@ JUMP_GUARD_DEG = 90.0  # 单帧方位角变化超过此角度视为传感器毛�
 class App(PynputMouseController):
     def __init__(
         self,
-        sensitivity: float = 1.0,        # 角度(°)->像素 增益
-        attenuation_coefficient: float = 0.6,  # 一阶低通: 上一帧速度保留比例 [0,1)
-        deadzone: float = 0.15,          # 死区(°): 小于此的方位差不触发鼠标移动
+        sensitivity: float = 1.0,        # 角度(°)->速度 增益 (对齐 may-node 原版感受)
+        attenuation_coefficient: float = 0.0,  # 平滑系数: 0 = 停用, 按绝对角度变化直接驱动 (原版做法, 不滑)
+                                              # >0 = 少量低通防抖, 保留上一帧比例
+        deadzone: float = 0.15,          # 死区(°): 小于此的方位角变化忽略 (抑制静止抖动)
         scale: float = 8.0,              # 最终像素缩放
         kp: float = 0.5,                 # Mahony 比例增益 (跟随加速度计重力)
         ki: float = 0.1,                 # Mahony 积分增益 (消除陀螺零偏)
@@ -116,10 +121,16 @@ class App(PynputMouseController):
         if abs(d_el) < self.deadzone:
             d_el = 0.0
 
-        # 一阶低通平滑 (attenuation 为保留上一帧速度的比例)
+        # 按绝对角度的变化直接驱动 (原版做法): 每帧 = 角度差 * 增益
+        # 不累积速度惯性, 停住即停, 不"滑"; attenuation<=0 时完全停用平滑。
         att = self.attenuation_coefficient
-        self.v_x = self.v_x * att + d_az * self.sensitivity * (1 - att)
-        self.v_y = self.v_y * att + d_el * self.sensitivity * (1 - att)
+        if att <= 0:
+            self.v_x = d_az * self.sensitivity
+            self.v_y = d_el * self.sensitivity
+        else:
+            # 少量低通防抖: 保留上一帧 att 比例 + 新帧 (1-att) 比例
+            self.v_x = self.v_x * att + d_az * self.sensitivity * (1 - att)
+            self.v_y = self.v_y * att + d_el * self.sensitivity * (1 - att)
 
     def update_mouse(self):
         self.move_mouse(

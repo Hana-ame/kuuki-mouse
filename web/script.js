@@ -139,13 +139,20 @@
     $('textInput').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
-            sendControl({ t: 'text', text: $('textInput').value || '\n' });
-            $('textInput').value = '';
+            sendText();
         } else if (e.key === 'Backspace' && $('textInput').value === '') {
             e.preventDefault();
             sendControl({ t: 'key', key: 'Backspace' });
         }
     });
+    $('sendBtn').addEventListener('click', sendText);
+
+    function sendText() {
+        const v = $('textInput').value;
+        if (!v) { sendControl({ t: 'key', key: 'Enter' }); return; }  // 空则发回车
+        sendControl({ t: 'text', text: v });
+        $('textInput').value = '';
+    }
 
     // ---------------- 权限 + 启动 ----------------
     async function requestPermission() {

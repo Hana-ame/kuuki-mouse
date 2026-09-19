@@ -302,13 +302,31 @@ class InputController(PynputMouseController):
     def release_mouse(self, button: str = "left") -> None:
         self.mouse.release(self._button(button))
 
-    def click(self, button: str = "left", clicks: int = 1, interval: float = 0.05) -> int:
+    def click(
+        self,
+        button: str = "left",
+        clicks: int = 1,
+        interval: float = 0.05,
+        hold: float = 0.06,
+    ) -> int:
+        """点击。``hold`` 是按下与抬起之间的间隔, 默认 60ms。
+
+        **不要传 0**: pynput 的 ``Controller.click()`` 内部是瞬时的 down+up,
+        某些前端框架拿不到有效的按下-抬起配对, 于是只触发 hover 不触发 click ——
+        实测 DSH Web GUI 的发送按钮: 光标位置经读回确认到位、调用返回成功,
+        但按钮毫无反应、消息发不出去。这与 ``remote/win/winhost.ps1`` 里
+        ``mouse_event`` 瞬时连击是同一个坑, 两处行为保持一致。
+        """
         btn = self._button(button)
-        for i in range(max(1, int(clicks))):
+        total = max(1, int(clicks))
+        for i in range(total):
             if i:
                 time.sleep(max(0.0, interval))
-            self.mouse.click(btn)
-        return max(1, int(clicks))
+            self.mouse.press(btn)
+            if hold and hold > 0:
+                time.sleep(hold)
+            self.mouse.release(btn)
+        return total
 
     def scroll(self, dx: int = 0, dy: int = 0) -> None:
         """滚轮。``dy>0`` 向上, ``dx>0`` 向右。"""

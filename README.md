@@ -156,16 +156,31 @@ controller.py    鼠标控制 (pynput 封装)
 peerjs/          peerjs-python 的 fork (含 py3.12 兼容补丁, 见下)
 web/             手机页面 (GitHub Pages 发布内容, 即旧 www/ 的替代)
 test_attitude.py 姿态解算单元测试 (port of verify-attitude.mjs)
-remote/          本机远程控制扩展 (鼠标键盘 + 截屏, WebSocket / gRPC 双端口)
+remote/          本机远程控制扩展 (鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输)
   ├─ screen.py     截屏后端 (mss / Pillow / ffmpeg x11grab) + 裁剪/缩放/编码
   ├─ input.py      输入控制 (扩展 controller.PynputMouseController)
-  ├─ service.py    操作注册表 (op 调度, WS 与 gRPC 共用)
+  ├─ service.py    操作注册表 (op 调度, 三个传输共用)
   ├─ ws_server.py  WebSocket 服务端 (JSON + 二进制截屏帧 + 推流 + 鉴权)
   ├─ grpc_server.py gRPC 服务端 (含服务端流式截屏)
+  ├─ peerjs_server.py / peerjs_client.py  PeerJS 传输 (被控端 / 控制端)
+  ├─ ice.py        ICE 候选地址过滤 (自动排掉虚拟网卡)
+  ├─ toast.py      被控端无焦点角标通知 (notify op)
+  ├─ win/          Windows 宿主 (host.py + winhost.ps1)
   ├─ client.py     命令行客户端
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
 test_remote.py   remote/ 扩展的测试 (13 项, 不动鼠标键盘)
+wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
+start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
+docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机)
+
+# ---- 调试 / 演示小工具 ----
+annotate.py      截图上叠坐标网格 + 标记目标点/色块, 核对"算出的坐标偏没偏"
+click.html       点击靶页面 (纯品红大按钮, 点击 POST /click)
+play_target.py   点击靶 HTTP 服务 (仅靶, 不走 PeerJS, 供 WS 通道演示)
+p2p_clicktarget.py  点击靶 + PeerJS 控制点击, 结果写 _clicks.jsonl 由控制端判定
+p2p_toast.py     经 PeerJS 控制 Windows 发消息, 每步在被控端弹无焦点角标
+requirements.txt / requirements-remote.txt  依赖 (后者为 remote/ 扩展所需)
 .github/workflows/pages.yml  push 到 master 自动部署 web/ → GitHub Pages
 ```
 

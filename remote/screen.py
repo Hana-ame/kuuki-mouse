@@ -329,9 +329,15 @@ class FFmpegBackend(_Backend):
 
 
 def _probe_screen_size(display: Optional[str] = None) -> Tuple[int, int]:
-    """探测 X11 屏幕尺寸: Xlib -> xdpyinfo -> 环境变量 -> 1920x1080。"""
-    display = display or os.environ.get("DISPLAY") or ":0"
+    """探测屏幕尺寸。
 
+    顺序: 环境变量覆盖 -> Windows (GetSystemMetrics) -> X11 (Xlib -> xdpyinfo)
+    -> 兜底 1920x1080。
+
+    注意 Windows 必须用 GetSystemMetrics(0/1) 拿**主屏**尺寸, 与
+    ``PIL.ImageGrab.grab()`` 的全屏抓取范围一致; 早先漏了这个分支, Windows 上会
+    静默落到 1920x1080 兜底值, 与实际屏幕(如 1680x1050)不符。
+    """
     override = os.environ.get("KUUKI_SCREEN_SIZE")
     if override and "x" in override.lower():
         try:
@@ -339,6 +345,26 @@ def _probe_screen_size(display: Optional[str] = None) -> Tuple[int, int]:
             return int(w), int(h)
         except Exception:
             pass
+
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            try:  # 先声明 DPI 感知, 否则缩放屏上拿到的是虚拟化后的尺寸
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                try:
+                    user32.SetProcessDPIAware()
+                except Exception:
+                    pass
+            width, height = int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+            if width > 0 and height > 0:
+                return width, height
+        except Exception:
+            pass
+
+    display = display or os.environ.get("DISPLAY") or ":0"
 
     try:
         from Xlib import display as xdisplay

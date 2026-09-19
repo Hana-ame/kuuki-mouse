@@ -83,7 +83,21 @@ dist/kuuki-agent/kuuki-agent.exe --selftest
 `Analysis(["packaging/agent_entry.py"])` 会被解析成 `packaging/packaging/agent_entry.py`
 (基准是 `SPECPATH`, 不是 CWD)。spec 里统一用 `os.path.join(SPECPATH, ...)`。
 
-### 4.5 别用"目录是否存在"判断模块有没有打进去
+### 4.6 本地 venv 会掩盖 requirements 的缺项 (最重要的一条)
+
+`peerjs/api.py` 顶层就 `import aiohttp`, 但 `requirements.txt` 里**没有** aiohttp ——
+aiortc 1.11+ 已经不再间接带它。本地 venv 是多年前手动攒的, 里面躺着 aiohttp,
+于是本地怎么跑都正常, 谁也没发现清单少东西。
+
+CI 的干净环境一跑就露馅: `check_bundle.py` 报 `MISS aiohttp`, 模块总数 752
+(本机 856, 差的就是 aiohttp 一族)。补进 `requirements.txt` 才真正修好。
+
+**这条不只是打包问题** —— 任何人在新环境里 `pip install -r requirements.txt` 然后
+`python -m remote` 开 PeerJS, 都会 `ModuleNotFoundError`。CI 顺手把它挖出来了。
+
+教训: 本地 venv 越"全", 越容易掩盖依赖清单的洞。别信"我这儿能跑"。
+
+### 4.7 别用"目录是否存在"判断模块有没有打进去
 
 纯 Python 包 (`peerjs` / `pynput` / `aiortc`) 会被塞进 PYZ 归档, 在
 `_internal/` 下**没有对应目录**。第一次写 CI 时按目录检查, 4 个模块全报 MISS,
@@ -105,7 +119,9 @@ dist/kuuki-agent/kuuki-agent.exe --selftest
 
 ---
 
-## 6. 实测记录 (2026-09-20, 本机 Windows 10 + Python 3.10)
+## 6. 实测记录
+
+### 本机 (2026-09-20, Windows 10 + Python 3.10)
 
 - 构建 41 秒, 856 个模块, 产物 124 MB
 - `--version` → `kuuki remote 0.1.0`
@@ -113,6 +129,17 @@ dist/kuuki-agent/kuuki-agent.exe --selftest
 - `--no-ws --no-grpc` → 3 秒注册到公开 broker, 房间码 `kuuki-mouse-7DSGJ`
   (这条最关键: 证明 peerjs + aiortc + av + aioice 一整套 WebRTC 栈都真的进去了)
 - `check_bundle.py` → 4 组 26/26 全命中
+
+### CI (2026-09-20, windows-latest + Python 3.11, run 35477438541)
+
+- 全流程 1 分 21 秒, **866 个模块**, zip 产物 **57.2 MB** (解压后 124 MB)
+- 四层冒烟全部通过, 包括两层"看环境脸色"的:
+  - `--selftest` → `PASS`, 截屏 **1024x768** / 215 128 字节 / 198 ms
+    (runner 有桌面会话, 能真抓屏 —— 比预期强)
+  - `--no-ws --no-grpc` → **1.2 秒**注册到公开 broker, 房间码 `kuuki-mouse-R93SG`
+
+注: 本机 856 / CI 866 的差值来自 Python 版本 (3.10 vs 3.11) 与 stdin 的模块集合差异,
+不是缺件 —— `check_bundle.py` 的 26 项必需模块两边都全命中。
 
 ---
 

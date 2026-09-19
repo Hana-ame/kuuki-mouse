@@ -269,6 +269,110 @@ OK   self-grpc 1370.9ms  {"frames": 3, "bytes": 447343, "dir": ".../frames1\\sel
 
 落盘规则：多机 + 带扩展名 → `<名>-<别名>.<ext>`；多机 + 无扩展名 → 当目录，按 `<dir>/<别名>/NNNN.png`；路径里写 `{alias}` 占位符可自定义。
 
+---
+
+## 4.5 多机 / 多操纵端：没有真设备时用 dummy 练
+
+只有一台机器也能验证「一主多从」—— `remote/dummy.py` 起一批**仿真受控端**：真 `RemoteService`
++ 真 WS/gRPC 服务端，只把最底层的抓屏和输入换成假的。每台有自己的屏幕尺寸、响应延迟、操作日志，
+可以对指定那台单独注入故障。**关键是每台能分辨**：全都返回同一个答案的话，广播和单发就分不出来。
+
+### 起一批
+
+```bash
+python -m remote.dummy --count 3 --latency 0.08 --bootstrap-registry .workbuddy/tmp/swarm.json
+```
+
+```text
+起了 3 台仿真受控端 (Ctrl-C 停止):
+  dummy1       ws=ws://127.0.0.1:63579  size=320x200
+  dummy2       ws=ws://127.0.0.1:63580  size=400x250
+  dummy3       ws=ws://127.0.0.1:63581  size=256x160
+
+registry 已写好: .workbuddy/tmp/swarm.json
+试: python -m remote.ctl ping --all --registry .workbuddy/tmp/swarm.json
+```
+
+常用参数：`--transport ws|grpc|both`（每台同时开两种传输）、`--latency S` 固定延迟、
+`--jitter S` 随机抖动、`--fail-ops mouse.click` 给**最后一台**注入指定 op 的故障、
+`--names a,b,c` 自定义名字。
+
+### 一主多从：验证各答各的
+
+```bash
+R=.workbuddy/tmp/swarm.json
+python -m remote.ctl ping --all --registry $R
+python -m remote.ctl shot frames -a --registry $R     # 三张不同尺寸的图
+```
+
+```text
+OK  dummy1  190.0ms  {"ok": true, "pong": true, ..., "device": "dummy1"}
+OK  dummy2  190.0ms  {"ok": true, "pong": true, ..., "device": "dummy2"}
+OK  dummy3  189.9ms  {"ok": true, "pong": true, ..., "device": "dummy3"}
+
+OK  dummy1  {"path": "frames\dummy1.png", "bytes": 515, "width": 320, "height": 200, ...}
+OK  dummy2  {"path": "frames\dummy2.png", "bytes": 707, "width": 400, "height": 250, ...}
+OK  dummy3  {"path": "frames\dummy3.png", "bytes": 399, "width": 256, "height": 160, ...}
+```
+
+`info` / `ping` 的返回里多点一个 `device` 字段就是为这个——`ping` 看起来都一样，但能确认
+命令确实分头到了三台。尺寸/字节数不同则是更强的证据：拿到的是各自的画面，不是同一张图复制三份。
+
+### 多个操纵端同时下发
+
+真正的多个操纵端是**多个 ctl 进程**同时对同一批机器下手：
+
+```bash
+python -m remote.ctl ping --all --registry $R &     # 操纵端 A
+python -m remote.ctl ping --all --registry $R &     # 操纵端 B
+wait
+```
+
+两个进程都拿到完整的三条结果，registry 里三台都落成 `online`，文件没被写坏。
+
+> **这里踩过三个 Windows 特有的坑**（都已在 `remote/ctl.py` 里修掉，别再退回去）：
+>
+> 1. **registry 是 load→改→save，不是原子的。** 两个操纵端各自 load 到同一份快照，后写的把先写的
+>    整份冲掉 —— 实测双线程各 add 25 台，**最后只剩 26 台，丢了 24 条**。现在是
+>    `Registry.transaction()`：在文件锁里**重新读盘**再改再写。
+> 2. **锁要两层。** POSIX 的 `flock` 按 open file description 互斥，同进程多线程也管得着；
+>    但 Windows 的 `msvcrt.locking` **只跨进程生效** —— 实测同进程 4 个线程能同时进临界区
+>    （峰值 4/4）。所以 `FileLock` 里额外叠了一把 `threading.Lock`。
+> 3. **判断锁文件是否为空，别用 `read(1)`。** Windows 上别人锁住的字节范围对其它进程**不可读**，
+>    `read` 直接 `PermissionError`，被当成「锁不上」静默退化 —— 结果是锁从来没生效过。改用
+>    `os.path.getsize`。同理：对面正在 `os.replace` 的瞬间，另一进程的 `open(path,'r')` 也会
+>    `PermissionError`（Errno 13），读侧 `_read_json` 要退避重试。
+>
+> 附带一条：`os.replace` 的目标被别的线程打开时会 WinError 5「拒绝访问」（POSIX 没这回事），
+> `Registry.save` 里加了退避重试。临时文件名还必须带随机串 —— 只带 pid 的话，同一进程的多个操纵端
+> 会 truncate 同一个 tmp（实测 50 台 → 只剩 1 台）。
+
+### 对应的测试
+
+`test_remote.py` 里 13 项（合计 70 passed / 1 skipped），全部不碰真实光标：
+
+| 测试 | 验的是什么 |
+|---|---|
+| `test_dummy_swarm_gives_each_device_its_own_identity` | 每台端口/尺寸都不同 —— 一切「证明分头执行」断言的前提 |
+| `test_multi_machine_broadcast_reaches_every_device` | 一条广播，三台各收到一次（查 `device.received`） |
+| `test_multi_machine_each_device_answers_for_itself` | 返回值 + 屏幕尺寸各不相同（证明不是把同一台打三遍） |
+| `test_multi_machine_group_casts_only_to_members` | 组播只动组内，外的不被波及 |
+| `test_multi_machine_input_lands_on_every_device` | 输入类 op 落在每台自己的假鼠标/假键盘上 |
+| `test_multi_machine_one_faulty_device_does_not_sink_the_batch` | 一台注定失败，其余照常且只有它标 offline |
+| `test_multi_machine_concurrent_really_is_concurrent` | 并发墙钟明显小于串行累加 |
+| `test_registry_concurrent_writes_keep_every_entry` | 多线程并发改 registry 不丢条目（上面坑 1 的守门） |
+| `test_registry_transaction_does_nothing_when_block_raises` | `transaction` 里抛异常不许落盘 |
+| `test_registry_save_leaves_no_temporary_files` | 原子写不留垃圾 |
+| `test_two_controllers_dispatch_at_the_same_time` | 两个操纵端并行下发，registry 不坏 |
+| `test_second_controller_can_use_its_own_aliases` | 同一设备在两个操纵端里可以叫不同别名 |
+| `test_dummy_cli_smoke` | dummy CLI 参数至少能被自己的 parser 认下 |
+
+> 注意：写多机测试时，**集群必须跑在自己的事件循环线程里**（`swarm.serve_in_thread()`）。
+> 如果把 dummy 与控制端塞进同一个线程，控制端一阻塞服务端的 loop 就转不动，现象是
+> **所有机器一起超时**，很容易误判成「并发分发坏了」。
+
+---
+
 ### Step 5 · 输入链路（零位移，安全）
 
 ```bash

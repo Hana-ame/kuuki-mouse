@@ -139,6 +139,21 @@ python -m remote.ctl move self 400 300 --duration .3
 > 2026-09-20 本机自控实测: 起一个 `python -m remote --no-peerjs`, 注册成 WS 与 gRPC
 > 两个别名, ping / info / 光标 / 键预检 / 截屏 / 连续抓帧全部通过。
 
+### 3.3 没有真设备时: `python -m remote.dummy`
+
+`remote/dummy.py` 起一批**仿真受控端** —— 真 `RemoteService` + 真传输服务端, 只把抓屏和输入
+换成假实现。每台自带屏幕尺寸 / 响应延迟 / 操作日志, 还能单独给某台注入故障, 所以「命令到底去了哪台」
+是可验证的 (全都返回同一个答案的话, 广播和单发就分不出来)。用来验证一主多从与多操纵端:
+
+```bash
+python -m remote.dummy --count 3 --latency .08 --bootstrap-registry /tmp/swarm.json
+python -m remote.ctl ping --all --registry /tmp/swarm.json     # 三台各回各的答案
+python -m remote.ctl shot frames -a --registry /tmp/swarm.json # 三张不同尺寸的图
+```
+
+选项: `--transport ws|grpc|both` / `--latency` / `--jitter` / `--fail-ops mouse.click` (给最后一台
+注入故障) / `--names a,b,c`。详见 [ctl-selfhost-runbook.md](../docs/ctl-selfhost-runbook.md) 第 4.5 节。
+
 ## 4. WebSocket 协议
 
 请求 (文本帧, JSON):

@@ -127,6 +127,12 @@ python -m remote.ctl tail  frames -t pc1                  # 一直抓到 Ctrl-C
 - 截图回显：`shot` 存文件；`watch` / `tail` 按 `<目录>/<别名>/0001.png` 连续落盘（多机不会互相覆盖）。
 - registry 里的 token 是**明文**：新建时会收权限（POSIX 0600，Windows 用 icacls 断继承），不想落盘就让它读环境变量 `KUUKI_REMOTE_TOKEN`。
 - 退出码：全部成功 0；有机器失败 1；用法错误（未知别名 / 未知组 / `--args` 不是 JSON）2。
+- **多个操纵端并存**时 registry 的写走 `Registry.transaction()`（文件锁 + 重新读盘 + 原子写）。
+  朴素的 load→改→save 会让后写的把先写的整份冲掉（实测丢一半）；另外 Windows 上还要额外处理
+  「文件锁不跨线程」「`os.replace` 目标被占用会 WinError 5」「tmp 名撞 pid」三个坑，见
+  [ctl-selfhost-runbook.md](ctl-selfhost-runbook.md) 第 4.5 节。
+- **没有真设备也能验多机**：`python -m remote.dummy --count 3` 起一批仿真受控端（各自的屏幕/延迟/
+  操作日志，可单独注入故障），registry 直接由它生成。70 项测试里有 13 项在跑这套。
 
 > **想照着跑一遍？** 见 [docs/ctl-selfhost-runbook.md](ctl-selfhost-runbook.md)：
 > 实测记录、**14 条注意事项**（目标参数冲突 / registry 回填 / 端口占用 / 跨传输返回形状差异 / token 明文 / 只在 Windows 受控 / 本机 venv 与 git push 的坑）、以及**从零复现本机自控的 8 步**（起受控端 → 注册 self 与 self-grpc → 只读四连 → 截屏抓帧 → 零位移输入 → 故障演练 → 测试 → 收尾），每步附实测输出。

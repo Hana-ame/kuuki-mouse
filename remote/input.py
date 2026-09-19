@@ -29,6 +29,11 @@ from pynput.keyboard import Controller as KeyboardController, Key, KeyCode
 from pynput.mouse import Button, Controller as MouseController
 
 _LINUX = sys.platform.startswith("linux")
+# 注意: 受控端只支持 Windows (见 remote/__main__.py 的平台门禁), 所以 ``_LINUX``
+# 在服务端**恒为 False**。下面所有由它分出的 X11 分支都保留作参考但**不再维护**,
+# 也不会再被执行 —— 包括 ``_x11_reason`` 的纯查询式键预检。
+# 保留的意义是那几条实测教训: WSLg 的 XWayland 上 pynput 的"借键"路径会把整条
+# X 连接永久挂死, 以及 X11 下 pynput 打不出中文。
 
 # ---- 复用项目根目录下的 controller.py (以脚本方式直接跑 remote/ 时补 sys.path) ----
 try:  # pragma: no cover - 取决于启动方式
@@ -472,6 +477,7 @@ class InputController(PynputMouseController):
                 f"{name} 写入剪贴板失败: {proc.stderr.decode('utf-8', 'replace')[:200]}"
             )
         time.sleep(0.05)
+        # 不再维护: macOS 分支。受控端只支持 Windows, 这里恒定走 ctrl+v。
         paste_key = "cmd+v" if sys.platform == "darwin" else "ctrl+v"
         self.hotkey(paste_key)
         return {"chars": len(str(text)), "clipboard_tool": name, "hotkey": paste_key}

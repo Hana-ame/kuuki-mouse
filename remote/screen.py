@@ -131,11 +131,16 @@ class ScreenCapture:
 
     # ---- 抓图 ----
     def grab_image(self) -> Image.Image:
-        """抓整个屏幕。``ImageGrab.grab()`` 在 Windows/macOS 原生可用,
-        Linux 上走 X11 (WSLg 的 XWayland 不支持 root GetImage, 会抛异常)。"""
+        """抓整个屏幕。
+
+        受控端只支持 Windows, 正常路径就是 ``ImageGrab.grab()`` 无参数调用。
+        下面的 ``xdisplay`` 分支是为曾经在 WSLg(X11) 上跑而留 —— 服务端已不会在
+        非 Windows 启动 (见 ``remote/__main__.py`` 的 ``platform_refusal()``),
+        而且那条路截到的也不是 Windows 桌面。"""
         kwargs: Dict[str, object] = {}
         import sys
 
+        # 不再维护: Linux/X11 分支 (_LINUX 恒 False, 走不到)
         if sys.platform.startswith("linux"):
             kwargs["xdisplay"] = self.display or ":0"
         image = ImageGrab.grab(**kwargs)

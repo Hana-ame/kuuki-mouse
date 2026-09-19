@@ -1,5 +1,9 @@
 """``python -m remote`` —— 默认同时启动 WebSocket、gRPC 与 PeerJS 三个传输。
 
+**受控端只支持 Windows** —— 这是产品定位, 不是临时限制。非 Windows 上会在启动前直接
+拒绝 (退出码 2), 见 :func:`platform_refusal`。WSL / Linux / 手机侧只跑**客户端**, 连到
+Windows 上的服务端; 想从 WSL 里控制 Windows 桌面见 ``remote/win/``。
+
 默认**只绑 127.0.0.1**; 要给别的机器用必须显式 ``--allow-remote`` 且设置 token。
 PeerJS 不需要本地端口 —— 它注册到公开 broker, 靠房间码配对。
 
@@ -34,11 +38,43 @@ from remote.ws_server import WsServer  # noqa: E402
 
 log = logging.getLogger("kuuki.remote")
 
+#: 受控端 (被操作的那台机器) 的平台白名单。产品定位就是 Windows: 屏幕采集走
+#: ``PIL.ImageGrab``、输入注入走 pynput 的 Win32 后端, 目标桌面只有 Windows 一种。
+#: 非 Windows 的 X11 / WSLg 分支**保留作参考但不再维护** —— 见 ``remote/screen.py``
+#: 与 ``remote/input.py`` 里的 ``_LINUX`` 相关代码, 服务端不会再走到。
+SUPPORTED_PLATFORMS = ("win32",)
+
+
+def platform_refusal(platform: str | None = None) -> str | None:
+    """平台不受支持时返回给用户看的拒绝说明, 受支持时返回 ``None``。
+
+    ``platform`` 只用于测试注入, 默认取 ``sys.platform``。
+    """
+    current = sys.platform if platform is None else platform
+    if any(current.startswith(supported) for supported in SUPPORTED_PLATFORMS):
+        return None
+    return (
+        f"拒绝启动: 受控端只支持 Windows, 当前平台是 {current!r}。\n"
+        "\n"
+        "  受控端 = 被操作的那台机器, 它必须原生跑在 Windows 上:\n"
+        "      Windows 侧:  python -m remote        (或 start-win.bat)\n"
+        "\n"
+        "  要从 WSL / Linux / 手机侧操作它, 在那边只跑客户端, 连到 Windows 上的服务端:\n"
+        "      python -m remote.client peerjs --peer kuuki-mouse-<房间码> info\n"
+        "      python -m remote.client ws ping      (服务端在本机时)\n"
+        "\n"
+        "  想在 WSL 里控制 Windows 桌面: 见 remote/win/ (实验性, 未接入服务端)。\n"
+        "  详见 remote/README.md 第 5 节 (两端点的部署位置) 与第 8 节 (已知限制)。"
+    )
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m remote",
-        description="kuuki-mouse 远程控制扩展: 鼠标/键盘控制 + 截屏, 暴露 WebSocket / gRPC / PeerJS 三种传输",
+        description=(
+            "kuuki-mouse 远程控制扩展: 鼠标/键盘控制 + 截屏, "
+            "暴露 WebSocket / gRPC / PeerJS 三种传输 (受控端只支持 Windows)"
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
@@ -198,6 +234,12 @@ async def run_servers(args: argparse.Namespace) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    # 平台门禁: 放在 --help/--version 之后 (那两个在 parse_args 内就退出了, 不受影响),
+    # 但排在 --selftest 与起服务之前 —— 自检同样会碰屏幕和输入, 非 Windows 无从谈起。
+    refusal = platform_refusal()
+    if refusal is not None:
+        print(refusal, file=sys.stderr)
+        return 2
     logging.basicConfig(
         level=getattr(logging, str(args.log_level).upper(), logging.INFO),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

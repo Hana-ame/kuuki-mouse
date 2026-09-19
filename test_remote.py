@@ -59,6 +59,24 @@ def has_real_backend() -> bool:
         return False
 
 
+# ================================================================ 平台门禁
+
+
+def test_platform_gate_is_windows_only():
+    """受控端只支持 Windows: Windows 放行, 其余平台拒绝并给出可照做的提示。"""
+    gate = pytest.importorskip("remote.__main__")
+
+    assert gate.SUPPORTED_PLATFORMS == ("win32",)
+    assert gate.platform_refusal("win32") is None
+
+    for other in ("linux", "darwin", "freebsd13"):
+        reason = gate.platform_refusal(other)
+        assert reason is not None, f"{other} 应被拒绝"
+        assert "只支持 Windows" in reason
+        assert repr(other) in reason, "提示里要写清当前平台"
+        assert "start-win.bat" in reason and "remote.client" in reason, "提示要给出路"
+
+
 # ================================================================ 键名解析
 
 

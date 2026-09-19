@@ -41,7 +41,7 @@ controller (本机)
 
 ## 3. 动作集（op 表，三传输共用）
 
-### 已有（2026-09-19 实测可用）
+### 已实现（P1/P2 于 2026-09-20 落地）
 
 | op | 说明 | 关键参数 |
 |---|---|---|
@@ -50,25 +50,33 @@ controller (本机)
 | `mouse.move_rel` | 相对移动 | dx, dy, duration |
 | `mouse.click` | 单击/双击/右键，hold 默认 60ms | button, clicks, interval, hold |
 | `mouse.down` / `mouse.up` | 按住/松开 | button |
-| `mouse.scroll` | 滚轮（单步） | dx, dy |
-| `mouse.drag` | 两点拖动：按下→平滑→松开 | x1,y1,x2,y2, button, duration |
+| `mouse.scroll` | 滚轮；**steps>1 平滑多步**，**x/y 先定位再滚** | dx, dy, steps=1, interval=0.05, x?, y? |
+| `mouse.scroll_h` | 横向滚动（`dx` 为主体） | dx, dy=0, steps, interval |
+| `mouse.drag` | 拖拽；**points 走路径点**：首点按下→逐段平滑→末点松开 | x1,y1,x2,y2 **或** points=[[x,y],...]（也认 `"x,y;x,y"`）, button, duration（每段） |
 | `keyboard.type` | 文本输入（逐字符 interval；中文/emoji 必须改用 `keyboard.paste`） | text, interval |
 | `keyboard.key` | 单键 tap/press/release + 修饰键 | key, action, modifiers |
-| `keyboard.hotkey` | 组合键：依序按下→逆序松开 | keys=["ctrl","shift","s"] 或 "ctrl+shift+s" |
+| `keyboard.hotkey` | 组合键：依序按下→逆序松开 | keys=["ctrl","shift","s"] 或 "ctrl+shift+s", hold_ms=0 |
+| `keyboard.combo` | 组合键 + **按住时长**（与 hotkey 同一实现） | keys, hold_ms |
+| `keyboard.hold` | **按住单键 N 毫秒**再松开（F2 重命名这类长按） | key, ms |
 | `keyboard.paste` | 剪贴板 + Ctrl+V（中文/emoji 可靠输入） | text |
 | `keyboard.check` | 键支持性预检（不实际按键） | keys |
 
-### 方案新增 / 增强
+**向后兼容**：`scroll` 不传 steps 即单步（原行为）；`drag` 不传 points 仍认 x1/y1/x2/y2（两点 = points 两元素）；老协议 `{"t":"scroll","delta":N}` 仍被识别。
 
-| op | 说明 | 参数 |
+**多步滚动的总量守恒**：拆分时用"累计目标值取整后取差值"，不是每步 `dx // steps` ——
+后者会把整除余数丢掉（3 格 / 5 步会每步 0 格，最后一格都不滚）。
+
+**三传输一致性已验证**：15 个新动作用例逐条比对 WS 与 gRPC 的返回值与副作用
+（`test_remote.py::test_new_ops_agree_across_transports`）。过程中修掉两处真实偏差 ——
+gRPC 把 `keys: "ctrl+shift+s"` 当成一个键名没拆分、`duration: 0` 被 `or 0.3` 吞掉变成插值轨迹。
+另外 proto3 的普通标量分不清"显式给 0"与"缺省"，所以 `ScrollRequest.interval`、
+`DragRequest.duration`、`ScrollRequest.at_x/at_y` 都改成了 `optional`。
+
+### 仍未实现
+
+| op | 说明 | 状态 |
 |---|---|---|
-| `mouse.scroll` 增强 | **平滑多步滚动**；可先定位再滚 | dx, dy, steps=1, interval=0.05, x?, y? |
-| `mouse.drag` 增强 | **路径点拖动**：首点按下→逐段平滑→末点松开 | points=[[x,y],...], button, duration（每段） |
-| `keyboard.combo` | 组合键 + 可按住时长（长按场景） | keys / "ctrl+shift+s", hold_ms=0 |
-| `keyboard.hold` | 按住 N 毫秒再松开（F2 重命名这类长按） | key, ms |
-| `mouse.scroll_h` | 横向滚动别名（=scroll dx） | dx, dy=0, steps |
-
-**向后兼容**：`scroll` 不传 steps 即单步（现行为）；`drag` 不传 points 仍认 x1/y1/x2/y2（两点 = points 两元素）。
+| `screen.monitors` | 屏幕枚举（多显示器坐标对齐要用） | 未实现，见第 8 节风险表 |
 
 ## 4. 控制器 `kuuki_ctl`（新）
 
@@ -112,10 +120,10 @@ kuuki_ctl tail <alias>           # 连续 watch 存帧目录（回显窗口）
 
 ## 7. 实施顺序（可增量落地）
 
-1. **P1 `remote/input.py`**：scroll 平滑多步、drag 路径点、combo/hold（带单测）
-2. **P2 `remote/service.py` + proto**：注册新 op/别名；gRPC 补 RPC，保持三传输一致
-3. **P3 `kuuki_ctl.py`**：registry + 单发/广播/组播 + watch 回显
-4. **P4 部署包**：pack/agent + PyInstaller + 各 OS 启动脚本
+1. ✅ **P1 `remote/input.py`**（2026-09-20 完成）：scroll 平滑多步（总量守恒）、drag 路径点、combo 的 `hold_ms`、`keyboard.hold` 长按 —— 带单测，测试用假鼠标键盘，不碰真实光标。
+2. ✅ **P2 `remote/service.py` + proto**（2026-09-20 完成）：新增 `mouse.scroll_h` / `keyboard.combo` / `keyboard.hold` 与别名；proto 补 `Combo` / `HoldKey` / `ScrollHorizontal` 三个 RPC 与 `optional` 字段；gRPC 客户端修掉组合键不拆分与 `duration: 0` 被吞两处偏差。
+3. **P3 `kuuki_ctl.py`**：registry + 单发/广播/组播 + watch 回显 ← **下一步**
+4. **P4 部署包**：pack/agent + PyInstaller + 启动脚本（agent 只支持 Windows，只需 `start-agent.bat`）
 5. **P5 验收靶**：target_events.html + verify_events.py + 三传输用例
 6. **P6 冒烟**：本机起两个不同房间码的 agent 实例，controller 分别连（双机占位）；真多机等有第二台机器再跑
 
@@ -132,6 +140,9 @@ kuuki_ctl tail <alias>           # 连续 watch 存帧目录（回显窗口）
 ## 9. 本机已有可复用资产
 
 - `remote/` 三传输 + op 注册表（2026-09-19 跨机 WS 实测：`ping` 通、1680×1050 截图 132ms；agent 侧现在只允许 Windows）
+- `remote/input.py` 完整动作集（2026-09-20：多步滚动 / 路径点拖动 / combo 的 `hold_ms` / `hold` 长按），
+  `test_remote.py` 26 项测试覆盖（含跨传输等价用例），全部用假鼠标键盘断言
+- `remote/client.py` 的 `WsClient` / `GrpcClient` / `PeerJsClient`：P3 的分发层直接复用它，不用新写传输
 - `click.html` + `p2p_clicktarget.py`：点击自验证靶（`_clicks.jsonl`）
 - `annotate.py`：截图 overlay 网格标注（排障用）
 - `remote/toast.py`：无焦点通知（操作前提示不抢焦点）

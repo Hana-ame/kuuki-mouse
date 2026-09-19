@@ -185,7 +185,7 @@ remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键�
   ├─ client.py     命令行客户端
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
-test_remote.py   remote/ 扩展的测试 (15 项, 不动鼠标键盘; 含平台门禁用例)
+test_remote.py   remote/ 扩展的测试 (26 项, 不动鼠标键盘; 含平台门禁与跨传输等价用例)
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机)

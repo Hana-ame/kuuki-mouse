@@ -92,6 +92,10 @@ python -m remote.client ws ping
 python -m remote.client ws info
 python -m remote.client ws op mouse.position
 python -m remote.client ws op mouse.move --args '{"x":400,"y":300,"duration":0.2}'
+python -m remote.client ws op mouse.scroll --args '{"dy":10,"steps":5,"x":800,"y":400}'
+python -m remote.client ws op mouse.drag --args '{"points":[[100,100],[300,200],[500,150]],"duration":0.2}'
+python -m remote.client ws op keyboard.combo --args '{"keys":"ctrl+shift+s","hold_ms":150}'
+python -m remote.client ws op keyboard.hold --args '{"key":"f2","ms":600}'
 python -m remote.client ws op keyboard.check --args '{"keys":["a","enter","f13","中"]}'
 python -m remote.client ws screenshot /tmp/shot.png --max-width 1280 --draw-cursor
 python -m remote.client ws watch /tmp/frames --fps 2 --count 5 --format jpeg --max-width 1280
@@ -280,20 +284,23 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `ping` | — | 连通性 + uptime |
 | `info` | — | 系统/屏幕/后端/剪贴板/能力清单 |
 | `screen.size` *`size`* | — | 屏幕尺寸 |
-| `screen.monitors` *`monitors`* | — | 屏幕列表 (index 0 = 整个虚拟桌面) |
-| `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `monitor` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` | 抓一帧 |
+| `screen.monitors` *`monitors`* | — | 屏幕列表 (**尚未实现**, 见 `docs/puppet-multi-machine.md` 的待办) |
+| `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` | 抓一帧 |
 | `screen.grab` | 同上 | 同上, 强制二进制帧 (WS) |
 | `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 |
 | `mouse.position` *`position`* | — | 当前光标 |
 | `mouse.move` *`move`* | `x` `y` `duration` | 绝对定位 (`duration>0` 平滑) |
 | `mouse.move_rel` *`move_rel`* | `dx` `dy` `duration` | 相对移动 |
-| `mouse.click` *`click`* | `button` `clicks` `interval` | 点击 |
+| `mouse.click` *`click`* | `button` `clicks` `interval` `hold` | 点击 (`hold` 默认 60ms) |
 | `mouse.down` / `mouse.up` | `button` | 按住 / 松开 |
-| `mouse.scroll` *`scroll`* | `dx` `dy` (兼容老协议 `delta`) | 滚轮, `dy>0` 向上 |
-| `mouse.drag` *`drag`* | `x1` `y1` `x2` `y2` `button` `duration` | 拖拽 |
+| `mouse.scroll` *`scroll`* | `dx` `dy` (兼容老协议 `delta`) `steps` `interval` `x` `y` | 滚轮, `dy>0` 向上。`steps>1` 拆成多步平滑滚动 (总增量仍等于 `dx`/`dy`); `x`/`y` 先定位再滚 |
+| `mouse.scroll_h` *`scroll_h`* | 同 `mouse.scroll` (`dx` 为主体) | 横向滚动 |
+| `mouse.drag` *`drag`/`dragp`* | `x1` `y1` `x2` `y2` **或** `points`/`path`; `button` `duration` | 拖拽。`points=[[x,y],...]` (或 `"x,y;x,y"`) 走路径点, `duration` 是**每段**时长 |
 | `keyboard.type` *`type`/`text`* | `text` `interval` | 输入文本 |
 | `keyboard.key` *`key`* | `key` `action`(tap/press/release) `modifiers` | 单键 |
-| `keyboard.hotkey` *`hotkey`* | `keys` (`"ctrl+shift+s"` 或数组) | 组合键 |
+| `keyboard.hotkey` *`hotkey`* | `keys` (`"ctrl+shift+s"` 或数组) `hold_ms` | 组合键 |
+| `keyboard.combo` *`combo`* | 同 `keyboard.hotkey` | 组合键 + 按住时长 (`hold_ms`) |
+| `keyboard.hold` *`hold`* | `key` `ms` | 按住单键 `ms` 毫秒再松开 |
 | `keyboard.paste` *`paste`* | `text` | 写剪贴板 + Ctrl/Cmd+V (**中文/emoji 用这个**) |
 | `keyboard.check` *`check`/`keys`* | `keys` 或 `key` | **预检**键能不能发 (不按键) |
 | `kuuki` *`sensor`* | `message` | 老协议透传 |
@@ -364,12 +371,13 @@ PNG 魔数正确; region 裁剪 + `max_width` 缩放 (320x200 区域 → 160x100
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 15 项
+python -m pytest test_remote.py -v      # 26 项 (33 个用例, 含参数化)
 python -m remote --selftest --selftest-input
 ```
 
-**2026-09-20 Windows 实测** (`.venv-win`, py3.10.7, 1680x1050):
+**2026-09-20 Windows 实测** (`.venv-win`, py3.10.7, pytest 9.1.1, 1680x1050):
 
+- 测试套 **32 passed / 1 skipped** (跳过的是 Linux/X11 专用的键预检用例)。
 - 受控端正常启动 (`python -m remote --no-grpc --no-peerjs --ws-port 8766`),
   客户端 `python -m remote.client ws --url ws://127.0.0.1:8766 ping` 与同一命令换 `info`
   端到端都通, `info` 报 `os=Windows` / `clipboard_tool=clip`。
@@ -377,9 +385,16 @@ python -m remote --selftest --selftest-input
   Windows 上 `--help` / `--version` 不受影响。
 - 真实抓屏: `PIL.ImageGrab` 1680x1050, PNG 魔数正确; region 裁剪 + 缩放正常。
 - 光标位置读取正常 (`mouse.position`); `keyboard.check` 在 Windows 上恒为 supported。
+- **动作增强**: 多步滚动的总量守恒 (3 格 / 5 步 → 每步 1 格, 不丢余数)、
+  路径点拖动整条只按一次松一次、组合键 `hold_ms`、`keyboard.hold` 长按 —— 全部用
+  假鼠标/假键盘断言, 不碰真实光标与按键。
+- **三传输等价**: 15 个新动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
+  边界上也一致 —— `interval=0` / `duration=0` 这类"显式给 0"与"没给"能区分开
+  (proto3 普通标量做不到, 相关字段已改成 `optional`)。
 
-> 跑整套测试前先 `pip install pytest` —— `.venv-win` 里没装, 所以上面这些结论是直测
-> 出来的, 不是 `pytest` 的汇总。
+> `.venv-win` 里现在装了 pytest (9.1.1)。装的时候若 pip 报连不上
+> `127.0.0.1:10809`, 那是系统代理变量指到了一个没在跑的代理, 加
+> `env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy` 走直连即可。
 
 **2026-09-19 本机 (WSL2/WSLg, conda py3.12, `DISPLAY=:0`) 实测通过** —— 该路径自受控端
 限定 Windows 起不再支持, 结论保留在第 8 节:

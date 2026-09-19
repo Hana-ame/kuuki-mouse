@@ -212,8 +212,15 @@ class WindowsHost:
     def move(self, x: int, y: int) -> dict:
         return self.call("move", {"x": int(x), "y": int(y)})
 
-    def click(self, button: str = "left", clicks: int = 1) -> dict:
-        return self.call("click", {"button": button, "clicks": int(clicks)})
+    def click(self, button: str = "left", clicks: int = 1, hold_ms: int = 60) -> dict:
+        """点击。``hold_ms`` 是按下与抬起之间的间隔, 默认 60ms。
+
+        **不要传 0**: 瞬时 down+up 会被前端框架当成无效点击 —— 坐标正确、调用成功,
+        但按钮只触发 hover 不触发 click (实测 DSH 发送按钮)。
+        """
+        return self.call(
+            "click", {"button": button, "clicks": int(clicks), "hold": int(hold_ms)}
+        )
 
     def scroll(self, dx: int = 0, dy: int = 0) -> dict:
         return self.call("scroll", {"dx": int(dx), "dy": int(dy)})

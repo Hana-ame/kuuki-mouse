@@ -80,10 +80,15 @@ public static class KuukiWin {
     public const uint INPUT_KEYBOARD = 1;
     public const uint KEYEVENTF_KEYUP = 0x0002, KEYEVENTF_UNICODE = 0x0004;
 
-    public static void Mouse(uint down, uint up, int clicks) {
+    // holdMs: 按下与抬起之间的间隔。
+    // 不能用 0 —— 瞬时 down+up 会被前端框架当成无效点击 (只触发 hover 不触发 click),
+    // 实测 DSH 的发送按钮就是这样: 坐标正确、调用成功, 但按钮毫无反应。
+    public static void Mouse(uint down, uint up, int clicks, int holdMs) {
         for (int i = 0; i < clicks; i++) {
             mouse_event(down, 0, 0, 0, UIntPtr.Zero);
+            if (holdMs > 0) System.Threading.Thread.Sleep(holdMs);
             mouse_event(up, 0, 0, 0, UIntPtr.Zero);
+            if (clicks > 1) System.Threading.Thread.Sleep(60);  // 连击间隔, 避免被判双击
         }
     }
 
@@ -225,12 +230,14 @@ function Invoke-Op($req) {
         'click' {
             $btn = if ($req.button) { [string]$req.button } else { 'left' }
             $n = if ($req.clicks) { [int]$req.clicks } else { 1 }
+            # hold 默认 60ms: 给前端框架留出配对 down/up 的时间窗 (0 会点不动按钮)
+            $hold = if ($null -ne $req.hold) { [int]$req.hold } else { 60 }
             switch ($btn) {
-                'right'  { [KuukiWin]::Mouse([KuukiWin]::MOUSEEVENTF_RIGHTDOWN, [KuukiWin]::MOUSEEVENTF_RIGHTUP, $n) }
-                'middle' { [KuukiWin]::Mouse([KuukiWin]::MOUSEEVENTF_MIDDLEDOWN, [KuukiWin]::MOUSEEVENTF_MIDDLEUP, $n) }
-                default  { [KuukiWin]::Mouse([KuukiWin]::MOUSEEVENTF_LEFTDOWN, [KuukiWin]::MOUSEEVENTF_LEFTUP, $n) }
+                'right'  { [KuukiWin]::Mouse([KuukiWin]::MOUSEEVENTF_RIGHTDOWN, [KuukiWin]::MOUSEEVENTF_RIGHTUP, $n, $hold) }
+                'middle' { [KuukiWin]::Mouse([KuukiWin]::MOUSEEVENTF_MIDDLEDOWN, [KuukiWin]::MOUSEEVENTF_MIDDLEUP, $n, $hold) }
+                default  { [KuukiWin]::Mouse([KuukiWin]::MOUSEEVENTF_LEFTDOWN, [KuukiWin]::MOUSEEVENTF_LEFTUP, $n, $hold) }
             }
-            return @{ button = $btn; clicks = $n }
+            return @{ button = $btn; clicks = $n; hold = $hold }
         }
         'down' {
             $btn = if ($req.button) { [string]$req.button } else { 'left' }

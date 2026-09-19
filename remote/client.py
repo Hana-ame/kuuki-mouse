@@ -369,9 +369,32 @@ class GrpcClient:
             raise ValueError(f"gRPC 客户端不支持 op {op!r}; 支持: {', '.join(sorted(table))}")
         message = table[op]()
         try:
-            return self._to_dict(message)
+            converted = self._to_dict(message)
         except Exception:
             return message
+        return _unwrap_ack(converted)
+
+
+def _unwrap_ack(payload: Any) -> Any:
+    """把 ``Ack{ok, message}`` 拆回 WS 那种结构化字典。
+
+    gRPC 侧**没有返回值**的那些 RPC (mouse.move / mouse.click / ping …) 统一用
+    ``Ack`` 兜底, 而 handle 出来的结果被 ``json.dumps`` 塞进 ``message`` 一串 JSON;
+    WS / PeerJS 是直接返回对象。控制端要拿三传输的结果互相比较, 形状必须一致,
+    所以这里把 JSON 串拆回来 —— 拆不动就原样返回, 不会比之前更差。
+    """
+    if not isinstance(payload, dict) or set(payload) != {"ok", "message"}:
+        return payload
+    raw = payload.get("message")
+    if not raw:
+        return payload
+    try:
+        inner = json.loads(raw)
+    except (TypeError, ValueError):
+        return payload
+    if not isinstance(inner, dict):
+        return payload
+    return {**inner, "ok": bool(payload.get("ok", True))}
 
 
 # ================================================================ CLI

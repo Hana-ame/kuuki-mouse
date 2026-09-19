@@ -12,6 +12,7 @@
 ``grpc_server`` gRPC 服务端 (protobuf 强类型 + 服务端流式截屏)
 ``peerjs_server`` PeerJS 服务端 (公开 broker + 房间码, 自带应用层分块)
 ``peerjs_client`` / ``client`` PeerJS 客户端与命令行客户端 (调试/冒烟用)
+``ctl``           **多机控制端**: registry + 别名/组/广播分发 + 结果汇总 (``-m remote.ctl``)
 ``win``       WSL → Windows 的实验性 PowerShell 桥 (未接入服务端, 见 ``win/host.py``)
 
 快速开始::

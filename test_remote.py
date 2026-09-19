@@ -18,6 +18,7 @@ import sys
 import pytest
 from PIL import Image
 
+from remote import ctl
 from remote.input import InputController, KeyUnsupported, resolve_key
 from remote.screen import Region, ScreenCapture
 from remote.service import RemoteError, RemoteService
@@ -693,3 +694,204 @@ def test_new_ops_agree_across_transports():
     ):
         assert flatten(ws_result) == flatten(grpc_result), f"{op} {args} 返回值不一致"
         assert ws_side == grpc_side, f"{op} {args} 副作用不一致"
+
+# ================================================================ 控制端 (P3)
+#
+# ``remote/ctl.py`` = 多机编排层。这些测试全都不联网: 要么直接调 registry /
+# 分发函数, 要么把 WS 服务端起在**随机端口**上做端到端 —— 不允许碰真实光标。
+
+
+def _machine(alias: str, **kwargs) -> ctl.Machine:
+    payload = {"transport": "ws", "endpoint": "ws://127.0.0.1:1/"}
+    payload.update(kwargs)
+    return ctl.Machine(alias=alias, **payload)
+
+
+def test_ctl_registry_crud_and_persistence(tmp_path):
+    path = str(tmp_path / "registry.json")
+    registry = ctl.Registry(path)
+    registry.put(_machine("a", groups=["office"], timeout=3.0, note="工位机"))
+    registry.put(_machine("b", transport="grpc", endpoint="10.0.0.2:50051", groups="lab,office"))
+    registry.save()
+
+    # 逗号字符串应被拆成列表
+    assert registry.get("b").groups == ["lab", "office"]
+    reloaded = ctl.Registry.load(path)
+    assert list(reloaded.machines()) == ["a", "b"]
+    machine = reloaded.get("a")
+    assert (machine.transport, machine.timeout, machine.note) == ("ws", 3.0, "工位机")
+    assert reloaded.get("missing") is None
+
+    assert registry.remove("b") is True
+    assert registry.remove("b") is False
+    registry.save()  # 注销要落盘才算数
+    assert list(ctl.Registry.load(path).machines()) == ["a"]
+
+
+def test_ctl_resolve_all_group_alias_and_dedupe():
+    registry = ctl.Registry("unused.json")
+    for alias, groups in (("a", ["office"]), ("b", ["office"]), ("c", ["lab"])):
+        registry.put(_machine(alias, groups=groups))
+
+    assert [m.alias for m in registry.resolve(["a"])] == ["a"]
+    assert [m.alias for m in registry.resolve(["a", "b"])] == ["a", "b"]
+    assert [m.alias for m in registry.resolve([], all_machines=True)] == ["a", "b", "c"]
+    assert [m.alias for m in registry.resolve(["all"])] == ["a", "b", "c"]
+    # 组播与单播重叠时不应重复下发同一台
+    assert [m.alias for m in registry.resolve(["c"], group="office")] == ["a", "b", "c"]
+
+    with pytest.raises(KeyError):
+        registry.resolve(["nope"])
+    with pytest.raises(KeyError):
+        registry.resolve([], group="ghost")
+
+
+def test_ctl_dispatch_collects_per_machine_outcome():
+    """一台挂了不能拖垮整批 —— 结果按机器逐条列出。"""
+    good, bad = _machine("good"), _machine("bad")
+
+    async def worker(machine):
+        if machine.alias == "bad":
+            raise RuntimeError("连接被拒")
+        return {"ok": True}
+
+    results = run(ctl.dispatch([good, bad], worker))
+    by_alias = {item["alias"]: item for item in results}
+    assert by_alias["good"]["ok"] is True
+    assert by_alias["bad"]["ok"] is False
+    assert by_alias["bad"]["error"] == "RuntimeError: 连接被拒"
+    assert all(isinstance(item["elapsed_ms"], float) for item in results)
+
+
+def test_ctl_dispatch_honours_per_machine_timeout():
+    slow = _machine("slow", timeout=0.05)
+
+    async def worker(_machine):
+        await asyncio.sleep(0.5)
+
+    results = run(ctl.dispatch([slow], worker))
+    assert results[0]["ok"] is False
+    assert results[0]["error"].startswith("TimeoutError:")
+    assert "0.05s" in results[0]["error"]
+
+
+def test_ctl_update_states_marks_offline_and_online():
+    registry = ctl.Registry("unused.json")
+    registry.put(_machine("a"))
+    registry.put(_machine("b"))
+    ctl.update_states(registry, [
+        {"alias": "a", "ok": True},
+        {"alias": "b", "ok": False, "error": "TimeoutError: 超过 1s 未响应"},
+    ])
+    assert registry.get("a").state == "online"
+    assert registry.get("a").last_seen
+    assert registry.get("b").state == "offline"
+    assert "TimeoutError" in registry.get("b").last_error
+
+
+@pytest.mark.parametrize("command, want", [
+    ("ping all", ("ping", {})),
+    ("pos -a", ("mouse.position", {})),
+    ("move self 400 300 --duration .3", ("mouse.move", {"x": 400, "y": 300, "duration": 0.3})),
+    ("move-rel self --dx 5 --dy -5", ("mouse.move_rel", {"dx": 5, "dy": -5, "duration": 0.0})),
+    ("click self --button right --clicks 2",
+     ("mouse.click", {"button": "right", "clicks": 2, "interval": 0.05})),
+    ("down self", ("mouse.down", {"button": "left"})),
+    ("up self --button middle", ("mouse.up", {"button": "middle"})),
+    ("scroll self --dy 3 --steps 5", ("mouse.scroll", {"dx": 0, "dy": 3, "steps": 5})),
+    ("scroll-h self --dx 4 --steps 2", ("mouse.scroll_h", {"dx": 4, "dy": 0, "steps": 2})),
+    ("drag self 10 10 200 200 --duration .5",
+     ("mouse.drag", {"x1": 10, "y1": 10, "x2": 200, "y2": 200, "button": "left",
+                     "duration": 0.5})),
+    ("dragp self 10,10;100,100", ("mouse.drag", {"points": "10,10;100,100", "button": "left"})),
+    ("type self hello --interval 0.01", ("keyboard.type", {"text": "hello", "interval": 0.01})),
+    ("paste self 中文", ("keyboard.paste", {"text": "中文"})),
+    ("key self f5", ("keyboard.key", {"key": "f5", "action": "tap", "modifiers": []})),
+    ("combo self ctrl+shift+s --hold 200",
+     ("keyboard.combo", {"keys": "ctrl+shift+s", "hold_ms": 200.0})),
+    ("hold self f2 500", ("keyboard.hold", {"key": "f2", "ms": 500.0})),
+])
+def test_ctl_translates_cli_to_ops(command, want):
+    """文档里那套命令必须真能被 parser 认下, 且翻译成对的 op —— 防止悄悄失效。"""
+    args = ctl._fill_defaults(ctl.build_parser().parse_args(command.split()))
+    op, payload = ctl._machine_op(args)
+    assert (op, payload) == want
+
+
+def test_ctl_op_and_check_take_targets_by_flag():
+    """op 名 / check 键名与别名列表都是位置参数, 会互相吞 —— 目标只能走 -t/-g/-a。"""
+    args = ctl._fill_defaults(ctl.build_parser().parse_args("op screen.size -t self".split()))
+    assert (args.command, args.name, ctl._wanted(args)) == ("op", "screen.size", ["self"])
+
+    args = ctl._fill_defaults(ctl.build_parser().parse_args("check -a ctrl shift".split()))
+    assert ctl._machine_op(args)[1] == {"keys": ["ctrl", "shift"]}
+
+
+def test_ctl_expand_path_avoids_overwrite():
+    # 单机: 原样
+    assert ctl.expand_path("shot.png", "a", False) == "shot.png"
+    # 多机 + 文件名: 插别名
+    assert ctl.expand_path("shot.png", "a", True) == "shot-a.png"
+    # 多机 + 无扩展名: 当目录
+    assert ctl.expand_path("shots", "a", True).replace("\\", "/") == "shots/a.png"
+    # 占位符
+    assert ctl.expand_path("f-{alias}.png", "a", True) == "f-a.png"
+
+
+def test_ctl_end_to_end_over_ws(tmp_path):
+    """真的起一个 WS 受控端, 走一遍控制端的完整链路。
+
+    底线是这个链条不能断: registry → 目标解析 → 传输适配 → 结果汇总 → 状态回填。
+    全程假屏幕 + 假输入, 不碰真实光标。
+
+    注意: 整段必须**在同一个协程里**跑完 —— ``ctl.main()`` 内部会自己
+    ``asyncio.run``, 服务端也就跟着被那次 run 结束时关闭了 (现有测试的多次
+    ``run()`` 之所以没事, 是因为它们每次都在协程内连完就走)。
+    """
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    server = WsServer(service, host="127.0.0.1", port=0)
+    registry_path = str(tmp_path / "registry.json")
+
+    async def scenario():
+        await server.start()
+        # 端口要在协程里取: 事件循环关闭后 socket 也被收掉, 再 getsockname() 会报 10038
+        port = server._server.sockets[0].getsockname()[1]
+        try:
+            registry = ctl.Registry(registry_path)
+            registry.put(ctl.Machine(alias="ag", transport="ws",
+                                     endpoint=f"ws://127.0.0.1:{port}/", groups=["local"]))
+            registry.save()
+
+            # 命令⁻>op 的翻译: 直接喂真实的命令行动词
+            machines = registry.resolve(["all"])
+            for command, op in (
+                ("ping all", "ping"),
+                ("pos all", "mouse.position"),
+                ("info -g local", "info"),
+            ):
+                args = ctl._fill_defaults(ctl.build_parser().parse_args(command.split()))
+                assert ctl._machine_op(args)[0] == op
+                results = await ctl.dispatch(
+                    registry.resolve(ctl._wanted(args), group=args.group, all_machines=args.all),
+                    lambda m, op=op: ctl.call_machine(m, op, {}),
+                )
+                assert [item["ok"] for item in results] == [True], f"{op} 失败: {results}"
+
+            meta, data = await ctl.capture_machine(machines[0], {"format": "png"})
+            assert meta["width"] == 200 and len(data) > 100  # 假屏幕是 200x100
+
+            ctl.update_states(registry, [{"alias": "ag", "ok": True}])
+            registry.save()
+            assert ctl.Registry.load(registry_path).get("ag").state == "online"
+        finally:
+            await server.close()
+
+    run(scenario())
+
+
+def test_ctl_reports_unknown_alias(tmp_path):
+    registry = str(tmp_path / "registry.json")
+    ctl.main(["machines", "add", "a", "--transport", "ws",
+              "--endpoint", "ws://127.0.0.1:1/", "--registry", registry])
+    # 未知别名是用法错误, 退出码 2, 不是"执行失败"的 1
+    assert ctl.main(["ping", "ghost", "--registry", registry]) == 2

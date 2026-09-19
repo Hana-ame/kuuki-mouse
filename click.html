@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>kuuki-mouse click test</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; }
+  body {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-family: "Microsoft YaHei UI", sans-serif; color: #eee;
+    user-select: none;
+  }
+  h1 { font-size: 20px; font-weight: 500; color: #888; margin: 0 0 28px; }
+  /* 纯品红: 便于在截图里用像素分析精确定位 */
+  #target {
+    width: 320px; height: 130px; border: none; border-radius: 12px;
+    background: #ff00ff; color: #fff;
+    font-size: 26px; font-weight: bold; font-family: inherit;
+    cursor: pointer;
+  }
+  #target:active { background: #cc00cc; }
+  #status { margin-top: 24px; font-size: 15px; color: #9aa0a6; }
+  #count { color: #ff00ff; font-weight: bold; font-size: 22px; }
+</style>
+</head>
+<body>
+  <h1>kuuki-mouse · 点击靶</h1>
+  <button id="target">点我</button>
+  <div id="status">点击次数 <span id="count">0</span> · 最近一次 <span id="last">—</span></div>
+
+<script>
+  let n = 0;
+  const target = document.getElementById('target');
+  const countEl = document.getElementById('count');
+  const lastEl = document.getElementById('last');
+
+  function report(button, extra) {
+    n += 1;
+    countEl.textContent = n;
+    lastEl.textContent = button + (extra ? ' @' + extra : '');
+    // 上报给本地服务, 便于控制端机器验证
+    fetch('/click', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({n: n, button: button, extra: extra || '', ts: Date.now()})
+    }).catch(() => {});
+  }
+
+  target.addEventListener('click', e => report('left', e.detail));
+  target.addEventListener('contextmenu', e => { e.preventDefault(); report('right'); });
+  target.addEventListener('auxclick', e => {
+    if (e.button === 1) { e.preventDefault(); report('middle'); }
+  });
+  // 键盘也报一下, 验证键盘链路
+  window.addEventListener('keydown', e => {
+    if (e.key.length === 1 || e.key === 'Enter') report('key:' + e.key);
+  });
+</script>
+</body>
+</html>

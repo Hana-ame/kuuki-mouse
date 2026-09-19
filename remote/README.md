@@ -135,10 +135,39 @@ ws.onopen = () => ws.send(JSON.stringify({
 和 WS/gRPC 并列的第三种传输, **op 语义完全一致**。走公开 cloud broker
 (`0.peerjs.com:443`), 靠房间码配对 —— **不需要端口、域名、证书、端口转发**。
 
-```bash
-python -m remote --no-ws --no-grpc        # 只开 PeerJS, 启动时打印房间码
-python -m remote --no-ws --no-grpc --room ABCDE
+### ⚠️ 这是**两个端点**, 服务端必须跑在你要控制的那台机器上
+
+PeerJS 不是一个"端口", 而是两端各自连 broker、由 broker 牵线:
+
 ```
+ 被控端 (要操作的那台机器)              控制端 (发起方)
+   python -m remote --no-ws --no-grpc      PeerJsClient("kuuki-mouse-<房间码>")
+        │                                        │
+        └────────► 0.peerjs.com:443 ◄────────────┘
+              (只做牵线, 数据走 P2P)
+```
+
+**最常见的错误**: 在 A 机器起了服务, 却想让 B 机器"连自己" —— 那没有服务端。
+要在哪台机器上动鼠标键盘、截哪台机器的屏, **服务端就必须跑在那台机器上**。
+
+具体到本机的场景 (WSL + Windows):
+
+| 想控制谁 | 服务端跑在哪 | 控制端跑在哪 |
+|---|---|---|
+| **Windows 桌面** | Windows (`start-win.bat --no-ws --no-grpc`) | WSL / 手机 / 任何地方 |
+| WSLg 的 X 屏幕 | WSL (但那个屏幕是空的, 见第 8 节) | — |
+
+```bash
+# 被控端 (Windows): 只开 PeerJS, 打印房间码, 不需要任何端口
+start-win.bat --no-ws --no-grpc --room ABCDE
+
+# 控制端 (WSL / 异地 / 手机): 连过去
+python -m remote.client peerjs --peer kuuki-mouse-ABCDE --op mouse.position
+```
+
+**为什么这里不用管防火墙/端口**: WS 与 gRPC 绑 `127.0.0.1` 就出不了本机, 绑
+`0.0.0.0` 又要开防火墙、还要处理 WSL↔Windows 的网关地址; PeerJS 两端都只**出站**
+连 broker, 不监听任何端口, NAT 后面也能用 —— 这是它在跨机场景下比 WS/gRPC 省事的地方。
 
 主机 id = `kuuki-mouse-<房间码>`, 客户端用随机 id 连过来:
 

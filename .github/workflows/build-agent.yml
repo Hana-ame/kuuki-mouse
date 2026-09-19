@@ -1,0 +1,144 @@
+# 用 PyInstaller 构建受控端 kuuki-agent.exe (仅 Windows)
+#
+# 为什么只打这一个: 受控端 = "被操作的那台机器", 是要分发到别人电脑上、那边往往没装
+# Python 的那个。控制端 (-m remote.ctl / -m remote.client) 一直在开发环境里跑, 保持源码运行,
+# 不打进这个包 —— 见 remote/__init__.py 里两端的部署位置说明。
+#
+# 为什么只在 windows-latest 上打: 受控端本来就只支持 Windows (屏幕走 PIL.ImageGrab、
+# 输入走 pynput 的 Win32 后端), remote/__main__.py 有 platform_refusal() 门禁, 在别的平台上
+# 打出来也是个一启动就退出的 exe。
+#
+# 产物:
+#   - 每次推送: Actions artifacts (保留 14 天)
+#   - 推 v* tag: 额外创建 GitHub Release, 挂 kuuki-agent-windows-x64.zip
+#
+# 本地复现:
+#   pip install -r requirements.txt -r requirements-remote.txt "pyinstaller>=6"
+#   pyinstaller packaging/kuuki-agent.spec --noconfirm
+name: Build kuuki-agent
+
+on:
+  push:
+    branches: [feat/remote-control, master]
+    tags: ["v*"]
+  pull_request:
+    branches: [feat/remote-control, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-agent-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    # 只有打 tag 时才需要写权限去建 Release, 其余情况 read 就够
+    permissions:
+      contents: ${{ startsWith(github.ref, 'refs/tags/v') && 'write' || 'read' }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          # 3.11 是 av / aiortc / pywin32 wheel 覆盖最全的一档, 别轻易动
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-remote.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-remote.txt -r requirements-build.txt
+          python -c "import PyInstaller; print('pyinstaller', PyInstaller.__version__)"
+
+      - name: 依赖自检 (打包前先确认源码能跑)
+        run: |
+          python -c "import remote, remote.service, remote.screen, remote.input; print('remote ok', remote.VERSION)"
+          python -c "import grpc, google.protobuf, websockets, PIL, pynput; print('transport ok')"
+          python -c "import peerjs, aiortc, av, aioice; print('webrtc ok')"
+
+      - name: PyInstaller 打包
+        # --workpath 显式指定: 后面的产物检查脚本按这个路径找 PYZ 的 TOC
+        run: pyinstaller packaging/kuuki-agent.spec --noconfirm --distpath dist --workpath build/agent
+
+      - name: 上传打包警告日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuuki-agent-build-warnings
+          path: build/agent/warn-kuuki-agent.txt
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: 冒烟 —— 启动 / 参数 / 版本
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXE=dist/kuuki-agent/kuuki-agent.exe
+          test -f "$EXE"
+          "$EXE" --version
+          "$EXE" --help > /dev/null
+          echo "冒烟通过: exe 能启动, argparse 与 remote 包本体正常"
+
+      - name: 冒烟 —— 惰性导入的依赖真的打进去了
+        # peerjs / app / controller 都是函数体内 import 的, --help 走不到,
+        # 不打进去的话用户一开 PeerJS 才炸。静态查 PYZ 清单, 不依赖屏幕和网络。
+        run: python packaging/check_bundle.py build/agent/kuuki-agent
+
+      - name: 冒烟 —— 自检 (需要桌面会话, 抓不到屏不算构建失败)
+        # runner 以服务会话跑, ImageGrab 不一定有屏可抓; 但能跑通就是强证据,
+        # 证明 PIL.ImageGrab / pynput 在打包后仍然可用。
+        continue-on-error: true
+        run: dist/kuuki-agent/kuuki-agent.exe --selftest
+
+      - name: 深度冒烟 —— 真起一次 PeerJS 服务 (需要外网, 失败不阻塞)
+        # 只开 PeerJS 一个传输, 看它能不能注册到公开 broker 拿到房间码。
+        # 这一步依赖 runner 能连 0.peerjs.com, 外网抖动会让它红, 所以 continue-on-error。
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          EXE=dist/kuuki-agent/kuuki-agent.exe
+          "$EXE" --no-ws --no-grpc --json > peerjs_smoke.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 45); do
+            if grep -q 'kuuki-mouse-' peerjs_smoke.log 2>/dev/null; then break; fi
+            sleep 1
+          done
+          kill $pid 2>/dev/null || true
+          cat peerjs_smoke.log
+          grep -q 'kuuki-mouse-' peerjs_smoke.log && echo "深度冒烟通过: PeerJS 已注册到 broker" || echo "深度冒烟未通过 (可能是外网)"
+
+      - name: 打包 zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/kuuki-agent -DestinationPath kuuki-agent-windows-x64.zip
+          Get-Item kuuki-agent-windows-x64.zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: kuuki-agent-windows-x64
+          path: kuuki-agent-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: 发布 Release (仅 tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes \
+            kuuki-agent-windows-x64.zip

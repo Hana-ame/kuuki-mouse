@@ -1,0 +1,10 @@
+# 只用于**打包** (PyInstaller), 不是运行时依赖。
+#
+# 为什么单独一个文件: 打出来的 exe 里已经带了所有运行时依赖, 装 exe 的人不需要 pip。
+# 把 pyinstaller 混进 requirements.txt 会让"装依赖跑源码"的人白白装一个用不上的包。
+#
+# 用法:
+#   pip install -r requirements.txt -r requirements-remote.txt -r requirements-build.txt
+#   pyinstaller packaging/kuuki-agent.spec --noconfirm
+
+pyinstaller>=6      # 6.x 才有对 grpc / PIL / cryptography 的完整 hook

@@ -24,6 +24,9 @@ from remote import ctl
 from remote import dummy
 from remote.dummy import FakeKeyboard, FakeMouse, fake_controller, fake_screen
 from remote.input import InputController, KeyUnsupported, resolve_key
+from remote.peerjs_client import PeerJsClient
+from remote.peerjs_server import (CHUNK_SIZE, PEER_PREFIX, PeerJsChunker,
+                                  PeerJsServer, split_message)
 from remote.screen import Region, ScreenCapture
 from remote.service import RemoteError, RemoteService
 from remote.ws_server import WsServer, decode_frame, encode_frame
@@ -1082,3 +1085,379 @@ def test_dummy_cli_smoke(tmp_path):
     ])
     assert (args.count, args.transport, args.latency) == (4, "both", 0.1)
     assert args.fail_ops == "mouse.click"
+# ================================================================ PeerJS (回环验证)
+#
+# PeerJS 这条链路要真跑通, 需要外网 broker (0.peerjs.com) + WebRTC 打洞, 单机
+# CI 里永远做不到。但"我们的代码"和"网络"其实是两层:
+#
+#   [我们的] 信封协议 / 鉴权 / op 路由 / 大响应分块重组 / 控制端的 peerjs 分支
+#   [网络的] broker 注册、ICE 候选交换与打洞、DataChannel 真实吞吐
+#
+# 下面用一个**内存回环**把前一层完整跑通: 拿一对假 DataConnection 把
+# PeerJsServer 与 PeerJsClient 直接对接, 中间的 send() 就是一次函数调用, 不经过
+# 任何 Socket。于是除了"网络那一层", 其余都和真机跑的路径完全一致 —— 包括
+# ctl 的 peerjs 分支 (下面 test_ctl_peerjs_branch_end_to_end 让 ctl 真以为是 PeerJS)。
+#
+# 剩下必须真机验证的三件事写在 docs/peerjs-analysis.md 第 5 节。
+
+
+class _FakeConn:
+    """``DataConnection`` 的行为替身: 只实现 send/close, 把消息交给对端。"""
+
+    def __init__(self, peer_id: str = "peer"):
+        self.peerId = peer_id
+        self.open = True
+        self.sent: List[dict] = []
+        self.on_data = None
+
+    async def send(self, data):
+        if not self.open:
+            raise RuntimeError("connection closed")
+        self.sent.append(data)
+        if self.on_data is not None:
+            await self.on_data(data)
+
+    async def close(self):
+        self.open = False
+
+
+class _Loopback:
+    """把 PeerJsServer 和 PeerJsClient 背靠背接起来。"""
+
+    def __init__(self, service, token=None, room="TEST01", client=None):
+        self.server = PeerJsServer(service, room=room, token=token)
+        self.client = client or PeerJsClient(
+            f"{PEER_PREFIX}-{room}", token=token, timeout=2.0
+        )
+        self.server_chunker = PeerJsChunker()
+        self.client_conn = _FakeConn("client")
+        self.server_conn = _FakeConn("server")
+        self.client._conn = self.client_conn
+        self.client_conn.on_data = self._to_server
+        self.server_conn.on_data = self._to_client
+        #: 打开后故意吞掉 end 块, 用来验证"分块不全时是超时而不是拿到错答案"
+        self.drop_end = False
+        self.dropped = 0
+
+    async def _to_server(self, data):
+        msg = self.server_chunker.feed(data)
+        if msg is None:
+            return
+        await self.server._handle(self.server_conn, msg)
+
+    async def _to_client(self, data):
+        # sleep(0) 让出一次: 并发请求时两个响应的分块会**交错**到达,
+        # 这正是分块 id 必须唯一的场合 (见 split_message 的 _CHUNK_SEQ)
+        await asyncio.sleep(0)
+        if self.drop_end and data.get("_chunk") == "end":
+            self.dropped += 1
+            return
+        msg = self.client._chunker.feed(data)
+        if msg is not None:
+            self.client._inbox.put_nowait(msg)
+
+
+def _noisy_screen(width: int = 240, height: int = 160) -> ScreenCapture:
+    """噪点假屏幕: PNG 压不动, 一帧上百 KB —— 用来逼出大响应分块。"""
+    import random as _random
+
+    rng = _random.Random(7)
+    raw = bytes(rng.randrange(256) for _ in range(width * height * 3))
+    screen = ScreenCapture()
+
+    def fake_grab():
+        return Image.frombytes("RGB", (width, height), raw)
+
+    screen.grab_image = fake_grab  # type: ignore[method-assign]
+    screen.screen_size = lambda *a, **k: (width, height)  # type: ignore[method-assign]
+    return screen
+
+
+def _service(**kwargs) -> RemoteService:
+    kwargs.setdefault("screen", fake_screen())
+    kwargs.setdefault("controller", fake_controller()[0])
+    return RemoteService(**kwargs)
+
+
+def test_peerjs_loopback_roundtrip_matches_direct_call():
+    """第一层证明: 一个 op 走完 PeerJS 全链路, 结果与直接调 service 一致。"""
+    service = _service()
+    lb = _Loopback(service)
+
+    for op, args in [("ping", {}), ("info", {}), ("mouse.position", {}),
+                     ("screen.size", {}), ("keyboard.check", {"keys": ["ctrl", "f5"]})]:
+        over_wire = run(lb.client.call(op, args))
+        direct = service.handle_request({"op": op, "args": dict(args)})
+        # ts / uptime_s 每次都在变, 比对时剔掉; 剩下的键集合必须完全一致
+        stable = lambda payload: {k: v for k, v in payload.items()
+                                  if k not in ("ts", "uptime_s")}
+        assert stable(over_wire) == stable(direct), f"{op}: 回环 {over_wire} != 直调 {direct}"
+
+
+def test_peerjs_loopback_reaches_the_controller():
+    """不只是"有返回值" —— op 真的落到了假鼠标键盘上。"""
+    mouse, keyboard = FakeMouse(), FakeKeyboard()
+    lb = _Loopback(RemoteService(screen=fake_screen(),
+                                 controller=InputController(mouse=mouse, keyboard=keyboard)))
+
+    assert run(lb.client.call("mouse.move", {"x": 120, "y": 80}))["x"] == 120
+    assert mouse.positions[-1] == (120, 80)
+
+    run(lb.client.call("keyboard.type", {"text": "hi"}))
+    assert ("type", "hi") in keyboard.events
+
+    run(lb.client.call("mouse.scroll", {"dy": 3, "steps": 3}))
+    assert sum(abs(dy) for _, dy in mouse.scrolls) == 3
+
+
+def test_peerjs_screenshot_survives_chunking():
+    """大截图必须走分块, 且重组后与服务端原始字节**逐字节相同**。
+
+    这是 PeerJS 最脆弱的一环: fork 把库内分块注释掉了, 全靠应用层这层。
+    """
+    lb = _Loopback(RemoteService(screen=_noisy_screen(), controller=fake_controller()[0]))
+
+    payload = run(lb.client.screenshot({"format": "png"}))
+    assert len(payload) > 60000, f"假屏幕不够大, 没触发分块: {len(payload)}B"
+
+    # 服务端发出的确实是分块序列 (head + N*data + end), 而不是一条整包
+    kinds = [part.get("_chunk") for part in lb.server_conn.sent]
+    assert kinds[0] == "head" and kinds[-1] == "end"
+    assert kinds.count("data") >= 2
+
+    # 与直接抓的对比
+    _, direct = lb.server.service.capture({"format": "png"})
+    assert payload == direct
+    assert lb.client.last_capture["width"] == 240
+    assert lb.client.last_capture["format"] == "png"
+
+
+def test_peerjs_split_message_threshold_and_unique_ids():
+    """阈值与分块 id: 两个都曾是隐患 (见 CHUNK_THRESHOLD / _CHUNK_SEQ 的注释)。"""
+    small = {"id": 1, "ok": True, "result": {"x": "a" * 5000}}
+    assert len(split_message(small)) == 1, "5KB 不该分块"
+
+    # 比单块大、但没到阈值: 也不该拆 —— 这是 CHUNK_THRESHOLD 存在的意义
+    # (拿 chunk_size 当阈值的话, 这里会被无谓地拆成两条)
+    middle = {"id": 3, "ok": True, "result": {"x": "c" * (CHUNK_SIZE * 5)}}
+    assert len(split_message(middle)) == 1
+
+    # 超过阈值才拆, 且每块不超过 chunk_size
+    big = {"id": 2, "ok": True, "result": {"x": "b" * (CHUNK_SIZE * 12)}}
+    parts = split_message(big)
+    assert len(parts) > 1
+    assert all(len(p.get("d", "")) <= CHUNK_SIZE for p in parts if p.get("_chunk") == "data")
+
+    # 连开 200 组分块, id 不能重复 —— 撞了就会两组块混进一组然后被丢弃
+    ids = [split_message(big)[0]["_id"] for _ in range(200)]
+    assert len(set(ids)) == 200
+
+    # 头里必须保留 id/ok, 否则重组端认不出这条响应是回给谁的
+    assert {"id": 2, "ok": True}.items() <= parts[0]["header"].items()
+
+    # 完整走一遍重组, 能还原出原始 result
+    chunker = PeerJsChunker()
+    restored = None
+    for part in parts:
+        restored = chunker.feed(part) or restored
+    assert restored["result"] == big["result"]
+
+
+def test_peerjs_auth_matrix():
+    """三种组合: 都不设 token / 都设且一致 / 服务端设了客户端没给。"""
+    # 1) 无 token: 直通
+    lb = _Loopback(_service())
+    assert run(lb.client.call("ping"))["pong"] is True
+
+    # 2) 有 token 且一致: 先 auth 再正常用 (这里不能调真 connect(), 那会去连 broker)
+    authed = _Loopback(_service(), token="s3cret")
+    assert run(authed.client.call("auth", {"token": "s3cret"}))["authenticated"] is True
+    assert run(authed.client.call("ping"))["pong"] is True
+
+    # 3) 服务端要 token、客户端没给: 第一个 op 就该被顶回来
+    lb = _Loopback(_service(), token="s3cret")
+    with pytest.raises(RuntimeError) as info:
+        run(lb.client.call("ping"))
+    assert "unauthorized" in str(info.value)
+    assert lb.server_conn.open is False, "鉴权失败后服务端应当断开这条连接"
+
+    # 4) token 不对: 同样被顶回来, 不能因为"带了 token"就放过
+    lb = _Loopback(_service(), token="s3cret")
+    with pytest.raises(RuntimeError) as info:
+        run(lb.client.call("auth", {"token": "wrong"}))
+    assert "unauthorized" in str(info.value)
+
+
+def test_peerjs_reports_remote_error_not_silence():
+    """服务端的 RemoteError 要带着 code 传回来, 不能变成"超时"这种假象。"""
+    lb = _Loopback(_service())
+    with pytest.raises(RuntimeError) as info:
+        run(lb.client.call("nope.not_an_op"))
+    assert "unknown_op" in str(info.value) or "bad_request" in str(info.value)
+
+    with pytest.raises(RuntimeError) as info:
+        run(lb.client.call("mouse.move", {"x": "abc"}))
+    assert "bad_request" in str(info.value)
+
+
+def test_peerjs_batch_and_legacy_kuuki_route():
+    """batch 信封与 kuuki 老协议消息都要能被路由到。"""
+    lb = _Loopback(_service())
+
+    # batch 列表必须在信封顶层: 塞进 args 只会被当成未知 op
+    with pytest.raises(RuntimeError) as info:
+        run(lb.client.call("batch", {"batch": [{"op": "ping"}]}))
+    assert "unknown_op" in str(info.value)
+
+    result = run(lb.client.batch([{"op": "ping"}, {"op": "screen.size"}]))
+    assert [item["ok"] for item in result["results"]] == [True, True]
+
+    # 老协议: 没有 op 字段, 靠 t/mouse/text/key 识别
+    enqueued = {"t": "move", "x": 10, "y": 20}
+    lb.client._next_id += 1
+    req_id = lb.client._next_id
+    run(lb.client._conn.send({"id": req_id, **enqueued}))
+    answered = run(asyncio.wait_for(lb.client._inbox.get(), timeout=2.0))
+    assert answered["id"] == req_id and answered["ok"] is True
+
+
+def test_peerjs_incomplete_chunks_time_out_instead_of_lying():
+    """分块没收齐时, 客户端必须超时报错 —— 绝不能拿半截数据当成功。"""
+    lb = _Loopback(RemoteService(screen=_noisy_screen(), controller=fake_controller()[0]))
+    lb.drop_end = True
+
+    # py3.10 里 asyncio.TimeoutError 还不是内置 TimeoutError, 两种都要认
+    with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+        run(lb.client.screenshot({"format": "png"}))
+    assert lb.dropped == 1
+
+
+def test_peerjs_concurrent_big_requests_stay_separate():
+    """同一条连接上并发两条大请求: 分块交错, 各拿各的。
+
+    回环里 _to_client 会让出一次, 所以两个响应的块是真的交错的 ——
+    这个用例同时压住了"响应 id 匹配"和"分块 id 唯一"两件事。
+    """
+    service = _service()
+    service.handlers["big.left"] = lambda args: {"blob": "L" * 90000}
+    service.handlers["big.right"] = lambda args: {"blob": "R" * 90000}
+    lb = _Loopback(service)
+
+    async def both():
+        return await asyncio.gather(
+            lb.client.call("big.left"), lb.client.call("big.right")
+        )
+
+    left, right = run(both())
+    assert left["blob"] == "L" * 90000
+    assert right["blob"] == "R" * 90000
+
+
+def test_peerjs_fork_api_contract():
+    """我们依赖的 fork API 必须还在 —— 换 fork / 升级时第一时间炸出来。"""
+    try:
+        from peerjs.dataconnection import DataConnection
+        from peerjs.enums import ConnectionEventType, PeerEventType
+        from peerjs.peer import Peer, PeerOptions
+    except ImportError:  # pragma: no cover - fork 不在 sys.path 时
+        pytest.skip("peerjs fork 不可用 (需要在项目根目录运行)")
+
+    for name in ("Open", "Close", "Data", "Error"):
+        assert hasattr(ConnectionEventType, name), f"ConnectionEventType.{name} 没了"
+    for name in ("Open", "Close", "Connection", "Error"):
+        assert hasattr(PeerEventType, name), f"PeerEventType.{name} 没了"
+
+    import inspect
+
+    for func in (Peer.start, Peer.connect, Peer.destroy, DataConnection.send,
+                 DataConnection.close):
+        assert inspect.iscoroutinefunction(func), f"{func} 不再是协程"
+
+    assert "secure" in vars(PeerOptions).get("__annotations__", {}) or hasattr(
+        PeerOptions, "secure"
+    ), "PeerOptions.secure 没了 (cloud broker 只收 wss)"
+
+    # 单块必须远小于 fork 的缓冲阈值, 否则会撞上它的背压路径
+    # (而那条路径是坏的: _tryBuffer 里 await 了个协程却没 await, 见 dataconnection.py)
+    assert CHUNK_SIZE * 4 < DataConnection.MAX_BUFFERED_AMOUNT
+
+
+def test_ctl_validates_endpoint_against_transport():
+    """三种传输的地址长得很不一样; 拼错了要当场报错, 别等到下发时才看不懂。"""
+    assert ctl.validate_endpoint("ws", "ws://1.2.3.4:8765") is None
+    assert ctl.validate_endpoint("ws", "1.2.3.4:8765") is not None
+    assert ctl.validate_endpoint("grpc", "1.2.3.4:50051") is None
+    assert ctl.validate_endpoint("grpc", "http://1.2.3.4") is not None
+    assert ctl.validate_endpoint("peerjs", "kuuki-mouse-ABCDE") is None
+    assert ctl.validate_endpoint("peerjs", "ws://broker/kuuki-mouse-ABCDE") is not None
+    assert ctl.validate_endpoint("peerjs", "kuuki mouse") is not None
+    assert ctl.validate_endpoint("ws", "") is not None
+
+
+def test_ctl_add_rejects_mismatched_endpoint(tmp_path):
+    registry = str(tmp_path / "registry.json")
+    assert ctl.main(["machines", "add", "bad", "--transport", "peerjs",
+                     "--endpoint", "ws://1.2.3.4:8765", "--registry", registry]) == 2
+    assert ctl.main(["machines", "add", "good", "--transport", "peerjs",
+                     "--endpoint", "kuuki-mouse-ABCDE", "--registry", registry]) == 0
+
+
+def test_ctl_gives_peerjs_a_wider_default_timeout(tmp_path):
+    registry = str(tmp_path / "registry.json")
+    ctl.main(["machines", "add", "w", "--transport", "ws",
+              "--endpoint", "ws://1.2.3.4:8765", "--registry", registry])
+    ctl.main(["machines", "add", "p", "--transport", "peerjs",
+              "--endpoint", "kuuki-mouse-ABCDE", "--registry", registry])
+    loaded = ctl.Registry.load(registry)
+    assert loaded.get("w").timeout == ctl.DEFAULT_TIMEOUT["ws"]
+    # peerjs 的预算里含 broker 注册 + ICE 打洞, 不能按 ws 那套给
+    assert loaded.get("p").timeout == ctl.DEFAULT_TIMEOUT["peerjs"] > loaded.get("w").timeout
+    # 显式给了就听用户的
+    ctl.main(["machines", "add", "p2", "--transport", "peerjs", "--timeout", "5",
+              "--endpoint", "kuuki-mouse-FGHIJ", "--force", "--registry", registry])
+    assert ctl.Registry.load(registry).get("p2").timeout == 5.0
+
+
+def test_ctl_peerjs_branch_end_to_end(tmp_path, monkeypatch):
+    """控制端的 peerjs 分支: 真的一条 ctl 命令走到底。
+
+    把 ``remote.peerjs_client.PeerJsClient`` 换成接在内存回环上的版本 —— ctl 自己
+    不知道, 它照常走 machines add -> 目标解析 -> call_machine/capture_machine ->
+    结果汇总 -> 状态回填。这条通了, 就只剩网络那一层没验证。
+    """
+    import remote.peerjs_client as peerjs_client_module
+
+    service = _service()
+
+    class LoopbackClient(PeerJsClient):
+        def __init__(self, peer_id, token=None, secure=True, timeout=30.0,
+                     serialization="json"):
+            super().__init__(peer_id, token=token, timeout=timeout)
+
+        async def connect(self, timeout=None):
+            _Loopback(service, client=self, room=self.peer_id.split("-")[-1])
+            self._connected.set()
+
+        async def close(self):
+            self._conn = None
+
+    monkeypatch.setattr(peerjs_client_module, "PeerJsClient", LoopbackClient)
+
+    registry = str(tmp_path / "registry.json")
+    assert ctl.main(["machines", "add", "px", "--transport", "peerjs",
+                     "--endpoint", "kuuki-mouse-ABCDE", "--group", "wan",
+                     "--registry", registry]) == 0
+
+    assert ctl.main(["ping", "--all", "--registry", registry]) == 0
+    assert ctl.main(["info", "-g", "wan", "--registry", registry]) == 0
+
+    shot = str(tmp_path / "shot.png")
+    assert ctl.main(["shot", shot, "--all", "--registry", registry]) == 0
+    assert os.path.getsize(shot) > 100
+
+    frames = str(tmp_path / "frames")
+    assert ctl.main(["watch", frames, "--all", "--fps", "20", "--count", "2",
+                     "--registry", registry]) == 0
+    assert sorted(os.listdir(os.path.join(frames, "px"))) == ["0001.png", "0002.png"]
+
+    assert ctl.Registry.load(registry).get("px").state == "online"

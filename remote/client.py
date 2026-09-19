@@ -68,15 +68,20 @@ class WsClient:
             await self.ws.close()
             self.ws = None
 
-    async def _send(self, op: str, args: Optional[dict] = None, req_id: Optional[int] = None) -> int:
+    async def _send(self, op: str, args: Optional[dict] = None, req_id: Optional[int] = None,
+                    top: Optional[dict] = None) -> int:
         self._next_id += 1
         rid = self._next_id if req_id is None else req_id
-        await self.ws.send(json.dumps({"id": rid, "op": op, "args": args or {}}, ensure_ascii=False))
+        envelope: dict = {"id": rid, "op": op, "args": args or {}}
+        # 少数字段必须在顶层 (如 batch), 与 PeerJS 客户端保持同一套信封写法
+        if top:
+            envelope.update(top)
+        await self.ws.send(json.dumps(envelope, ensure_ascii=False))
         return rid
 
-    async def call(self, op: str, args: Optional[dict] = None) -> dict:
+    async def call(self, op: str, args: Optional[dict] = None, top: Optional[dict] = None) -> dict:
         """发一条请求, 返回 result; 服务端报错则抛 RuntimeError。"""
-        rid = await self._send(op, args)
+        rid = await self._send(op, args, top=top)
         while True:
             raw = await asyncio.wait_for(self.ws.recv(), timeout=self.timeout)
             if isinstance(raw, (bytes, bytearray)):
@@ -89,7 +94,12 @@ class WsClient:
             if not msg.get("ok"):
                 error = msg.get("error") or {}
                 raise RuntimeError(f"{error.get('code')}: {error.get('message')}")
-            return msg.get("result") or {}
+            # 不能用 `or {}`: 会吞掉 0 / False / "" / [] 这类合法结果 (与 PeerJS 一致)
+            return msg["result"] if "result" in msg else {}
+
+    async def batch(self, items: list) -> dict:
+        """一次下发多个 op, 压掉 N-1 次往返。"""
+        return await self.call("batch", {}, top={"batch": items})
 
     async def screenshot(self, args: Optional[dict] = None):
         """走二进制通道抓一帧, 返回 (header, bytes)。"""

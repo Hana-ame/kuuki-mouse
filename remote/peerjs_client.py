@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Sequence
 
 from .peerjs_server import PeerJsChunker
 
@@ -44,6 +44,8 @@ class PeerJsClient:
         self._inbox: asyncio.Queue = asyncio.Queue()
         self._next_id = 0
         self._connected = asyncio.Event()
+        #: 最近一次截图的元数据 (不含图片本身), 见 screenshot()
+        self.last_capture: Optional[dict] = None
 
     # ---------------- 连接 ----------------
     async def connect(self, timeout: Optional[float] = None) -> None:
@@ -120,11 +122,25 @@ class PeerJsClient:
         await self.close()
 
     # ---------------- 调用 ----------------
-    async def call(self, op: str, args: Optional[dict] = None, timeout: Optional[float] = None) -> dict:
-        """发一条请求, 等对应 id 的响应 (自动跳过分块中间态)。"""
+    async def call(
+        self,
+        op: str,
+        args: Optional[dict] = None,
+        timeout: Optional[float] = None,
+        top: Optional[dict] = None,
+    ) -> dict:
+        """发一条请求, 等对应 id 的响应 (自动跳过分块中间态)。
+
+        ``top`` 里的键会并到信封**顶层** —— 有些字段只有在顶层才被认:
+        ``service.handle_request`` 看的是 ``request["batch"]``, 塞进 ``args``
+        里只会得到一个 ``unknown_op: 未知操作 'batch'``。
+        """
         self._next_id += 1
         req_id = self._next_id
-        await self._conn.send({"id": req_id, "op": op, "args": args or {}})
+        request: dict = {"id": req_id, "op": op, "args": args or {}}
+        if top:
+            request.update(top)
+        await self._conn.send(request)
 
         deadline = asyncio.get_running_loop().time() + (timeout or self.timeout)
         while True:
@@ -137,11 +153,26 @@ class PeerJsClient:
             if not msg.get("ok"):
                 error = msg.get("error") or {}
                 raise RuntimeError(f"{error.get('code')}: {error.get('message')}")
-            return msg.get("result") or {}
+            # 不能用 `or {}`: 那样会把 0 / False / "" / [] 这类**合法**的假值结果
+            # 吞成空 dict, 而 WS 传输是照实返回的 —— 三传输形状必须一致。
+            return msg["result"] if "result" in msg else {}
+
+    async def batch(self, items: Sequence[dict], timeout: Optional[float] = None) -> dict:
+        """一次下发多个 op: ``[{"op": "ping"}, {"op": "screen.size"}]``。
+
+        PeerJS 的每个请求都要等一整轮 (broker + 通道), 批量能把 N 次往返压成 1 次,
+        在高延迟链路上差别很明显。
+        """
+        return await self.call("batch", {}, timeout=timeout, top={"batch": items})
 
     async def screenshot(self, args: Optional[dict] = None) -> bytes:
-        """抓一帧, 返回图片字节 (服务端返回 base64, 这里解码)。"""
+        """抓一帧, 返回图片字节 (服务端返回 base64, 这里解码)。
+
+        解码前的元数据 (format/width/height/duration_ms …) 留在 ``last_capture``,
+        控制端要用它拼出和 WS / gRPC 同形状的 meta。
+        """
         import base64
 
         result = await self.call("screen.screenshot", args or {})
+        self.last_capture = {k: v for k, v in result.items() if k != "image_b64"}
         return base64.b64decode(result["image_b64"])

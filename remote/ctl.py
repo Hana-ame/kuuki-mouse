@@ -31,6 +31,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -49,8 +50,53 @@ from remote.service import VERSION  # noqa: E402
 
 TRANSPORTS = ("ws", "grpc", "peerjs")
 
+#: 各传输的默认单台超时。peerjs 明显更宽: 它的一次调用里含 broker 注册 +
+#: ICE 候选交换 + 打洞, 局域网内也要几秒; 按 ws 那套 10s 给, 慢一点的网络
+#: 会在握手阶段就把预算吃光, 表现为"每次都刚好超时"。
+DEFAULT_TIMEOUT: Dict[str, float] = {"ws": 10.0, "grpc": 10.0, "peerjs": 30.0}
+
 #: registry 文件格式版本
 SCHEMA = 1
+
+#: PeerJS 的 peer id 允许的字符 (broker 侧限制; 不含 ':' 与空白)
+_PEER_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
+
+
+def default_timeout_for(transport: str) -> float:
+    return DEFAULT_TIMEOUT.get(transport, 10.0)
+
+
+def validate_endpoint(transport: str, endpoint: str) -> Optional[str]:
+    """检查 endpoint 与传输是否匹配; 没问题返回 None, 否则返回给人看的原因。
+
+    早失败比晚失败好: 三种传输的地址长得完全不一样, 拼错了也不会在
+    ``machines add`` 时报错, 而是等到真正下发时才抛一个看不懂的连接错误,
+    在多机汇总里很容易被当成"那台机器挂了"。
+    """
+    endpoint = (endpoint or "").strip()
+    if not endpoint:
+        return "endpoint 不能为空"
+    if transport == "ws":
+        if not endpoint.startswith(("ws://", "wss://")):
+            return f"ws 传输的 endpoint 必须是 ws:// 或 wss:// 开头的 URL, 收到 {endpoint!r}"
+        return None
+    if transport == "grpc":
+        if "://" in endpoint:
+            return f"grpc 传输的 endpoint 是 host:port (不要带 scheme), 收到 {endpoint!r}"
+        return None
+    if transport == "peerjs":
+        if "://" in endpoint or "/" in endpoint or " " in endpoint:
+            return (
+                f"peerjs 传输的 endpoint 是 peer id (如 kuuki-mouse-ABCDE), "
+                f"不是 URL, 收到 {endpoint!r}"
+            )
+        if not _PEER_ID_RE.match(endpoint):
+            return (
+                f"{endpoint!r} 不是合法的 peer id: 只允许字母数字与 . _ -, "
+                f"长度 3-64 且以字母数字开头"
+            )
+        return None
+    return f"未知传输 {transport!r}"
 
 
 # ================================================================ registry
@@ -515,9 +561,14 @@ async def capture_machine(machine: Machine, args: Optional[dict] = None) -> Tupl
         await client.connect()
         try:
             payload = await client.screenshot(args)
+            meta = dict(client.last_capture or {})
         finally:
             await client.close()
-        return {"transport": "peerjs", "bytes": len(payload)}, payload
+        # last_capture 里已经带了 format/width/height/duration_ms/bytes,
+        # 补上 transport 后与 WS / gRPC 那两路的 meta 形状一致
+        meta["transport"] = "peerjs"
+        meta.setdefault("bytes", len(payload))
+        return meta, payload
 
     raise ValueError(f"未知传输 {machine.transport!r}; 支持: {', '.join(TRANSPORTS)}")
 
@@ -702,7 +753,11 @@ def build_parser() -> argparse.ArgumentParser:
     # -g 与动作命令里的 "--group" 是同一个意思, 别名统一起来写起来更顺手
     add.add_argument("-g", "--group", action="append", default=[], help="可重复, 也可用逗号分隔")
     add.add_argument("--os", default="win", help="agent 端平台 (agent 只支持 Windows, 恒为 win)")
-    add.add_argument("--timeout", type=float, default=10.0)
+    add.add_argument(
+        "--timeout", type=float, default=argparse.SUPPRESS,
+        help=f"这台机器的默认超时; 不给则按传输取 (ws/grpc {DEFAULT_TIMEOUT['ws']}s, "
+             f"peerjs {DEFAULT_TIMEOUT['peerjs']}s —— 它还要算上 broker 注册与 ICE 打洞)",
+    )
     add.add_argument("--note", default="")
     add.add_argument("--force", action="store_true", help="覆盖同名条目")
     # machines add 自己的 --timeout 是"这台机器的默认超时", 全局那个是"本次调用超时",
@@ -940,6 +995,10 @@ def _run_machines(args: argparse.Namespace, registry: Registry) -> int:
         return 0
 
     if action == "add":
+        problem = validate_endpoint(args.transport, args.endpoint)
+        if problem is not None:
+            print(f"endpoint 与传输不匹配: {problem}", file=sys.stderr)
+            return 2
         groups: List[str] = []
         for value in args.group:
             groups.extend([piece for piece in value.split(",") if piece])
@@ -950,7 +1009,8 @@ def _run_machines(args: argparse.Namespace, registry: Registry) -> int:
             token=args.token,
             os=args.os,
             groups=groups,
-            timeout=args.timeout,
+            # --timeout 没给就按传输取默认 (peerjs 更宽, 见 DEFAULT_TIMEOUT)
+            timeout=float(getattr(args, "timeout", 0) or default_timeout_for(args.transport)),
             note=args.note,
         )
         # 重名检查也得在锁里做, 否则两个操纵端会同时通过检查再互相覆盖 (TOCTOU)

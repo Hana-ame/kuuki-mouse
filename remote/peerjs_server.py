@@ -42,10 +42,11 @@ kuuki-mouse 本来就用 PeerJS(公开 cloud broker + 房间码 + 手机扫码),
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import logging
 import random
-import time
+import uuid
 from typing import Any, Dict, List, Optional
 
 from .service import RemoteError, RemoteService
@@ -136,16 +137,30 @@ class PeerJsChunker:
         return None
 
 
-def split_message(payload: dict, chunk_size: int = CHUNK_SIZE) -> List[dict]:
+#: 分块 id 的自增序号。为什么不用时间戳+随机数: 同一毫秒内连开两组分块时,
+#: 3 位随机数只有 1/1000 的区分度, 撞了接收端会把两组块混进同一组 —— 表现为
+#: "分块不完整, 丢弃", 然后那条请求一直等到超时。自增序号 + uuid 后缀彻底消除。
+_CHUNK_SEQ = itertools.count(1)
+
+
+def split_message(
+    payload: dict,
+    chunk_size: int = CHUNK_SIZE,
+    threshold: int = CHUNK_THRESHOLD,
+) -> List[dict]:
     """把一条大响应切成 head/data.../end 三条以上。
 
     只对 ``result`` 部分分块 —— 头里保留 id/ok, 这样重组端不用猜结构。
+
+    ``threshold`` 与 ``chunk_size`` 是两件事: 前者决定"要不要拆", 后者决定"拆多大"。
+    只拿 chunk_size 当阈值的话, 10KB 的响应也要拆成两条, 白白多两次往返。
     """
     body = json.dumps(payload.get("result"), ensure_ascii=False, separators=(",", ":"))
-    if len(body) <= chunk_size:
+    # 整体不超阈值就整条发; 单块大小仍按 chunk_size 切 (受 DataChannel 单消息上限约束)
+    if len(body) <= threshold:
         return [payload]
 
-    cid = f"c{int(time.time() * 1000) % 10**9}{random.randint(0, 999):03d}"
+    cid = f"c{next(_CHUNK_SEQ)}-{uuid.uuid4().hex[:8]}"
     header = {k: v for k, v in payload.items() if k != "result"}
     pieces = [body[i : i + chunk_size] for i in range(0, len(body), chunk_size)]
     out: List[dict] = [
@@ -155,6 +170,31 @@ def split_message(payload: dict, chunk_size: int = CHUNK_SIZE) -> List[dict]:
         out.append({"_chunk": "data", "_id": cid, "n": index, "d": piece})
     out.append({"_chunk": "end", "_id": cid})
     return out
+
+
+#: 退化路径: 连接对象不允许挂属性时的已鉴权集合 (见 _mark_authed)
+_AUTHORIZED_FALLBACK: set = set()
+
+
+def _mark_authed(conn: Any) -> None:
+    """给连接打上"已鉴权"标记。"""
+    try:
+        conn._kuuki_authed = True
+        return
+    except AttributeError:
+        pass
+    # 退化: 对端对象有 __slots__ 之类限制时, 用 id 记账。进程内 id 可能复用,
+    # 但这条路只在异常对象上才走, 且最坏结果是"重新鉴权一次", 不会放过未授权连接。
+    _AUTHORIZED_FALLBACK.add(id(conn))
+
+
+def _is_authed(conn: Any) -> bool:
+    try:
+        if getattr(conn, "_kuuki_authed", False):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return id(conn) in _AUTHORIZED_FALLBACK
 
 
 class PeerJsServer:
@@ -179,6 +219,8 @@ class PeerJsServer:
 
         self._peer = None
         self._connections: List[Any] = []
+        #: 每条连接的接收重组器与发送锁 (见 _reply: 分块响应必须整组连着发)
+        self._conn_state: Dict[Any, dict] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._ready = asyncio.Event()
         self._started = False
@@ -211,7 +253,9 @@ class PeerJsServer:
             self._connections.append(conn)
             log.info("PeerJS 客户端接入: %s", getattr(conn, "peerId", "?"))
 
-            chunker = PeerJsChunker()
+            state = {"chunker": PeerJsChunker(), "send_lock": asyncio.Lock()}
+            self._conn_state[conn] = state
+            chunker = state["chunker"]
 
             def on_data(data):
                 if isinstance(data, (bytes, bytearray)):  # fork 不支持二进制
@@ -228,6 +272,7 @@ class PeerJsServer:
 
             def on_close(*_):
                 log.info("PeerJS 连接断开: %s", getattr(conn, "peerId", "?"))
+                self._conn_state.pop(conn, None)
                 try:
                     self._connections.remove(conn)
                 except ValueError:
@@ -261,6 +306,7 @@ class PeerJsServer:
             except Exception:
                 pass
         self._connections.clear()
+        self._conn_state.clear()
         if self._peer is not None:
             try:
                 await self._peer.destroy()
@@ -283,15 +329,15 @@ class PeerJsServer:
         """处理一条完整请求并回发响应 (必要时分块)。"""
         # ---- 鉴权 ----
         op = msg.get("op")
-        if self.token and not getattr(conn, "_kuuki_authed", False):
+        if self.token and not _is_authed(conn):
             token = None
             if op == "auth":
                 token = (msg.get("args") or {}).get("token") or msg.get("token")
             if self._check_token(token):
-                conn._kuuki_authed = True
-                await self._send(conn, {"id": msg.get("id"), "ok": True, "result": {"authenticated": True}})
+                _mark_authed(conn)
+                await self._reply(conn, {"id": msg.get("id"), "ok": True, "result": {"authenticated": True}})
                 return
-            await self._send(
+            await self._reply(
                 conn,
                 {
                     "id": msg.get("id"),
@@ -309,23 +355,23 @@ class PeerJsServer:
         if op is None and any(k in msg for k in ("t", "mouse", "text", "key", "calibrate")):
             try:
                 result = await asyncio.to_thread(self.service.handle, "kuuki", {"message": msg})
-                await self._send(conn, {"id": msg.get("id"), "ok": True, "result": result})
+                await self._reply(conn, {"id": msg.get("id"), "ok": True, "result": result})
             except RemoteError as exc:
-                await self._send(conn, {"id": msg.get("id"), "ok": False, "error": exc.to_dict()})
+                await self._reply(conn, {"id": msg.get("id"), "ok": False, "error": exc.to_dict()})
             return
 
         if op == "auth":
-            await self._send(conn, {"id": msg.get("id"), "ok": True, "result": {"authenticated": True}})
+            await self._reply(conn, {"id": msg.get("id"), "ok": True, "result": {"authenticated": True}})
             return
 
         # ---- 普通 op ----
         try:
             result = await asyncio.to_thread(self.service.handle_request, msg)
-            await self._send(conn, {"id": msg.get("id"), "ok": True, "result": result})
+            await self._reply(conn, {"id": msg.get("id"), "ok": True, "result": result})
         except RemoteError as exc:
-            await self._send(conn, {"id": msg.get("id"), "ok": False, "error": exc.to_dict()})
+            await self._reply(conn, {"id": msg.get("id"), "ok": False, "error": exc.to_dict()})
         except Exception as exc:  # noqa: BLE001
-            await self._send(
+            await self._reply(
                 conn,
                 {
                     "id": msg.get("id"),
@@ -333,6 +379,20 @@ class PeerJsServer:
                     "error": {"code": "internal", "message": f"{exc.__class__.__name__}: {exc}"},
                 },
             )
+
+    async def _reply(self, conn, payload: dict) -> None:
+        """回一条响应; 持锁保证它的一组分块**连着**发出去。
+
+        一个响应可能被拆成 head + N×data + end。若两条大响应的分块交错发出,
+        虽然接收端按 ``_id`` 分组仍能重组, 但一组的块会横跨另一组的块,
+        更容易撞上 ``PeerJsChunker.max_pending`` 的淘汰。整组连着发最省心。
+        """
+        state = self._conn_state.get(conn)
+        if state is None:  # 连接已断开/未登记时退化为不带锁发送
+            await self._send(conn, payload)
+            return
+        async with state["send_lock"]:
+            await self._send(conn, payload)
 
     async def _send(self, conn, payload: dict) -> None:
         """发一条响应; 大响应自动分块。"""

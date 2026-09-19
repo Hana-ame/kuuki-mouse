@@ -14,11 +14,15 @@ import base64
 import json
 import os
 import sys
+import threading
+import time
 
 import pytest
 from PIL import Image
 
 from remote import ctl
+from remote import dummy
+from remote.dummy import FakeKeyboard, FakeMouse, fake_controller, fake_screen
 from remote.input import InputController, KeyUnsupported, resolve_key
 from remote.screen import Region, ScreenCapture
 from remote.service import RemoteError, RemoteService
@@ -33,22 +37,9 @@ def run(coro):
 
 
 # ================================================================ 假后端
-
-
-def fake_screen() -> ScreenCapture:
-    """造一个 ScreenCapture, 但 grab_image 打桩成内存里的假屏幕 (200x100)。
-
-    不需要假后端了 —— 只有一个后端, 直接换掉它的抓图方法。
-    """
-    screen = ScreenCapture()
-
-    def fake_grab():
-        image = Image.new("RGB", (200, 100), (10, 20, 30))
-        image.putpixel((50, 25), (255, 255, 255))
-        return image
-
-    screen.grab_image = fake_grab  # type: ignore[method-assign]
-    return screen
+#
+# 假屏幕 / 假输入统一住在 ``remote.dummy`` 里 —— 那里同一套假件还要给"多机仿真受控端"
+# 用 (每台有自己的主机名/尺寸/延迟), 测试只是它的一个使用者。
 
 
 def has_real_backend() -> bool:
@@ -426,57 +417,7 @@ def test_peerjs_chunker_roundtrip():
 # ================================================================ 动作增强 (P1)
 #
 # 下面全部用假鼠标/假键盘。真正的按下与移动只在 --selftest-input 冒烟里做。
-
-
-class FakeMouse:
-    """记录 scroll / 光标位置 / 按键次数, 不碰真实光标。"""
-
-    def __init__(self):
-        self.scrolls = []
-        self.positions = []
-        self.presses = 0
-        self.releases = 0
-        self._pos = (400, 300)
-
-    @property
-    def position(self):
-        return self._pos
-
-    @position.setter
-    def position(self, value):
-        self._pos = (int(value[0]), int(value[1]))
-        self.positions.append(self._pos)
-
-    def scroll(self, dx, dy):
-        self.scrolls.append((int(dx), int(dy)))
-
-    def press(self, button):
-        self.presses += 1
-
-    def release(self, button):
-        self.releases += 1
-
-
-class FakeKeyboard:
-    def __init__(self):
-        self.events = []
-
-    def press(self, key):
-        self.events.append(("press", str(key)))
-
-    def release(self, key):
-        self.events.append(("release", str(key)))
-
-    def tap(self, key):
-        self.events.append(("tap", str(key)))
-
-    def type(self, text):
-        self.events.append(("type", text))
-
-
-def fake_controller():
-    mouse, keyboard = FakeMouse(), FakeKeyboard()
-    return InputController(mouse=mouse, keyboard=keyboard), mouse, keyboard
+# 假件本身在 remote.dummy 里定义 (上面已 import), 这里只留测试自己的辅助函数。
 
 
 def side_effects(mouse, keyboard):
@@ -862,7 +803,7 @@ def test_ctl_end_to_end_over_ws(tmp_path):
                                      endpoint=f"ws://127.0.0.1:{port}/", groups=["local"]))
             registry.save()
 
-            # 命令⁻>op 的翻译: 直接喂真实的命令行动词
+            # 命令 → op 的翻译: 直接喂真实的命令行动词
             machines = registry.resolve(["all"])
             for command, op in (
                 ("ping all", "ping"),
@@ -895,3 +836,249 @@ def test_ctl_reports_unknown_alias(tmp_path):
               "--endpoint", "ws://127.0.0.1:1/", "--registry", registry])
     # 未知别名是用法错误, 退出码 2, 不是"执行失败"的 1
     assert ctl.main(["ping", "ghost", "--registry", registry]) == 2
+
+
+# ================================================================ 多机 / 多操纵端 (P3+)
+#
+# 真设备只有一台, 所以用 ``remote.dummy`` 起一批**仿真受控端**: 每台有自己的屏幕尺寸、
+# 自己的延迟、自己的操作日志, 还能对某台单独注入故障。这样"命令到底发给了谁"是可验证的
+# ——全都返回同一个答案的话, 广播和单发就分不出来。
+#
+# 这些测试**不碰真实光标**: dummy 后面是 FakeMouse / FakeKeyboard。
+
+
+@pytest.fixture
+def swarm():
+    """3 台仿真受控端, 跑在独立线程的事件循环里。"""
+    herd = dummy.DummySwarm.build(count=3, latency=0.05)
+    herd.serve_in_thread()
+    try:
+        yield herd
+    finally:
+        herd.shutdown_thread()
+
+
+def _registry(tmp_path, swarm, group="dummy", transport="ws") -> str:
+    path = str(tmp_path / "registry.json")
+    swarm.dump_registry(path, group=group, transport=transport)
+    return path
+
+
+def _machine(alias: str, **kwargs) -> ctl.Machine:
+    payload = {"transport": "ws", "endpoint": "ws://127.0.0.1:1/"}
+    payload.update(kwargs)
+    return ctl.Machine(alias=alias, **payload)
+
+
+def test_dummy_swarm_gives_each_device_its_own_identity(swarm):
+    """新颖测试的前提: 每台 dummy 得能分辨 —— 尺寸/屏幕内容/收到的 op 都自己记一份。"""
+    sizes = {device.size for device in swarm.devices}
+    assert len(sizes) == len(swarm.devices)          # 屏幕尺寸互不相同
+    assert len({device.name for device in swarm.devices}) == 3
+    assert all(device.ws_port for device in swarm.devices)
+    ports = {device.ws_port for device in swarm.devices}
+    assert len(ports) == 3                            # 端口也不冲突
+
+
+def test_multi_machine_broadcast_reaches_every_device(tmp_path, swarm):
+    """一主多从: 一条广播命令, N 台**每台都收到一次**。"""
+    registry = _registry(tmp_path, swarm)
+    assert ctl.main(["ping", "--all", "--registry", registry]) == 0
+    for device in swarm.devices:
+        assert device.count_op("ping") == 1, f"{device.name} 没收到 ping"
+
+
+def test_multi_machine_each_device_answers_for_itself(tmp_path, swarm, capsys):
+    """广播回来的答案必须**各不相同** —— 否则说明其实是把同一台打了三遍。"""
+    registry = _registry(tmp_path, swarm)
+    assert ctl.main(["info", "--all", "--registry", registry, "--json"]) == 0
+    answers = json.loads(capsys.readouterr().out)
+    # 每台自报家门, 一份不多一份不少
+    assert {item["result"]["device"] for item in answers} == {d.name for d in swarm.devices}
+
+    # 屏幕尺寸也照自己的来 -- 证明了各拿各的画面参数
+    capsys.readouterr()
+    assert ctl.main(["op", "screen.size", "--all", "--registry", registry, "--json"]) == 0
+    sizes = [tuple(item["result"][key] for key in ("width", "height"))
+             for item in json.loads(capsys.readouterr().out)]
+    assert len(set(sizes)) == 3
+
+
+def test_multi_machine_group_casts_only_to_members(tmp_path, swarm):
+    """组播: 只有组内的那几台动。"""
+    path = str(tmp_path / "registry.json")
+    entries = swarm.to_registry()["machines"]          # 先拿到 3 台
+    for alias, raw in entries.items():
+        raw["groups"] = ["alpha"] if alias in ("dummy1", "dummy2") else ["beta"]
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump({"version": 1, "machines": entries}, handle)
+
+    assert ctl.main(["ping", "-g", "alpha", "--registry", path]) == 0
+    touched = {d.name for d in swarm.devices if d.count_op("ping")}
+    assert touched == {"dummy1", "dummy2"}              # dummy3 没被波及
+
+    assert ctl.main(["ping", "-g", "beta", "--registry", path]) == 0
+    assert swarm.by_name("dummy3").count_op("ping") == 1
+
+
+def test_multi_machine_input_lands_on_every_device(tmp_path, swarm):
+    """真给每台发输入 op: 每台自己的假鼠标/假键盘都应各自留下痕迹。"""
+    registry = _registry(tmp_path, swarm)
+    assert ctl.main(["key", "--all", "--registry", registry, "f5"]) == 0
+    for device in swarm.devices:
+        assert any(event[0] == "tap" for event in device.keyboard.events)
+
+    assert ctl.main(["move", "--all", "--registry", registry, "640", "480"]) == 0
+    for device in swarm.devices:
+        assert device.mouse.positions[-1] == (640, 480)
+
+
+def test_multi_machine_one_faulty_device_does_not_sink_the_batch(tmp_path):
+    """最后一台注定失败: 整批不能跟着完蛋, 而且**只有它**被标 offline。"""
+    herd = dummy.DummySwarm.build(count=3, latency=0.0, fail_ops=("ping",))
+    herd.serve_in_thread()
+    try:
+        registry = str(tmp_path / "registry.json")
+        herd.dump_registry(registry)
+        broken = herd.devices[-1].name
+
+        assert ctl.main(["ping", "--all", "--registry", registry]) == 1
+
+        states = ctl.Registry.load(registry).data["machines"]
+        assert states[broken]["state"] == "offline"
+        healthy = [name for name in states if name != broken]
+        assert all(states[name]["state"] == "online" for name in healthy)
+        # 故障那一台的 error 要能看懂是从哪台来的
+        assert broken in states[broken]["last_error"]
+    finally:
+        herd.shutdown_thread()
+
+
+def test_multi_machine_concurrent_really_is_concurrent(tmp_path):
+    """并发不是口号: 3 台各慢 0.25s, 并发总耗时应明显小于串行累加。"""
+    herd = dummy.DummySwarm.build(count=3, latency=0.25)
+    herd.serve_in_thread()
+    try:
+        registry = str(tmp_path / "registry.json")
+        herd.dump_registry(registry)
+
+        started = time.perf_counter()
+        concurrent_rc = ctl.main(["ping", "--all", "--registry", registry])
+        parallel = time.perf_counter() - started
+
+        started = time.perf_counter()
+        serial_rc = ctl.main(["ping", "--all", "--registry", registry, "--serial"])
+        serial = time.perf_counter() - started
+
+        assert concurrent_rc == serial_rc == 0
+        assert parallel < serial * 0.75, (parallel, serial)
+    finally:
+        herd.shutdown_thread()
+
+
+# ---------------- 多个操纵端并存 ----------------
+
+
+def test_registry_concurrent_writes_keep_every_entry(tmp_path):
+    """真正的坑: 多个操纵端同时改 registry, 后写的不能把先写的整份冲掉。
+
+    修复前实测丢一半 (50 台并发 add 只剩 26 台): load -> 改 -> save 不是原子操作。
+    """
+    path = str(tmp_path / "registry.json")
+    width = 12
+
+    def add_group(prefix: str) -> None:
+        for index in range(width):
+            assert ctl.main([
+                "machines", "add", f"{prefix}{index}", "--transport", "ws",
+                "--endpoint", f"ws://127.0.0.1:{9000 + index}/", "--registry", path,
+            ]) == 0
+
+    threads = [threading.Thread(target=add_group, args=(prefix,)) for prefix in ("a", "b")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    machines = ctl.Registry.load(path).data["machines"]
+    assert len(machines) == 2 * width
+    assert all(f"{prefix}{index}" in machines
+               for prefix in "ab" for index in range(width))
+
+
+def test_registry_transaction_does_nothing_when_block_raises(tmp_path):
+    """``transaction`` 里抛异常 / return 时不许落盘 —— 校验失败就该什么都不改。"""
+    path = str(tmp_path / "registry.json")
+    registry = ctl.Registry(path)
+    registry.put(_machine("kept"))
+    registry.save()
+
+    with pytest.raises(RuntimeError):
+        with registry.transaction() as live:
+            live.put(_machine("thrown-away"))
+            raise RuntimeError("模拟校验失败")
+
+    after = ctl.Registry.load(path).data["machines"]
+    assert "kept" in after
+    assert "thrown-away" not in after
+
+
+def test_registry_save_leaves_no_temporary_files(tmp_path):
+    path = str(tmp_path / "registry.json")
+    registry = ctl.Registry(path)
+    registry.put(_machine("a"))
+    registry.save()
+    registry.put(_machine("b"))
+    registry.save()
+
+    leftovers = [name for name in os.listdir(str(tmp_path)) if ".tmp" in name]
+    assert leftovers == []
+    assert set(ctl.Registry.load(path).data["machines"]) == {"a", "b"}
+
+
+def test_two_controllers_dispatch_at_the_same_time(tmp_path, swarm):
+    """两个操纵端同时对同一批机器下发: 各拿各的结果, registry 不被写坏。"""
+    registry = _registry(tmp_path, swarm)
+    outcomes: Dict[str, int] = {}
+
+    def controller(name: str) -> None:
+        outcomes[name] = ctl.main(["ping", "--all", "--registry", registry])
+
+    threads = [threading.Thread(target=controller, args=(name,)) for name in ("c1", "c2")]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert outcomes == {"c1": 0, "c2": 0}
+    for device in swarm.devices:
+        assert device.count_op("ping") == 2        # 每个操纵端各来一次
+
+    machines = ctl.Registry.load(registry).data["machines"]
+    assert all(raw["state"] == "online" for raw in machines.values())
+
+
+def test_second_controller_can_use_its_own_aliases(tmp_path, swarm):
+    """同一个设备可以在两个操纵端里叫不同的别名 —— 别名是控制端各自的便利叫法。"""
+    first = str(tmp_path / "c1.json")
+    second = str(tmp_path / "c2.json")
+    aliases = {"dummy1": "左", "dummy2": "中", "dummy3": "右"}
+    swarm.dump_registry(first, aliases=aliases)
+    swarm.dump_registry(second, aliases={name: f"{name}-alt" for name in swarm.endpoints()})
+
+    assert ctl.main(["ping", "左", "--registry", first]) == 0
+    assert ctl.main(["ping", "dummy1-alt", "--registry", second]) == 0
+    assert swarm.by_name("dummy1").count_op("ping") == 2
+    assert swarm.by_name("dummy2").count_op("ping") == 0
+
+
+# ================================================================ dummy 命令行
+
+def test_dummy_cli_smoke(tmp_path):
+    """:mod:`remote.dummy` 的 CLI 参数至少要能被自己的 parser 认下。"""
+    args = dummy.build_parser().parse_args([
+        "--count", "4", "--transport", "both", "--latency", "0.1",
+        "--fail-ops", "mouse.click", "--bootstrap-registry", str(tmp_path / "reg.json"),
+    ])
+    assert (args.count, args.transport, args.latency) == (4, "both", 0.1)
+    assert args.fail_ops == "mouse.click"

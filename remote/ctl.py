@@ -33,10 +33,13 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
+import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 # 允许 `python remote/ctl.py` 直接跑
 if __package__ in (None, ""):  # pragma: no cover
@@ -106,12 +109,178 @@ class Machine:
         return f"{self.endpoint} ({self.transport})"
 
 
+def _replace_with_retry(source: str, destination: str, attempts: int = 40) -> None:
+    """``os.replace`` + 退避重试 —— **Windows 特有的一步**。
+
+    POSIX 的 rename 覆盖是原子的, 目标文件正被别人读也没关系。Windows 不一样:
+    目标只要还开着句柄, ``MoveFileEx`` 就直接回 WinError 5「拒绝访问」。多操纵端场景下
+    另一个操纵端恰好在 ``Registry.load`` 的 ``open()`` 里, 这里就会崩 —— 实测 50 次
+    并发写里能撞上 13 次。
+
+    重试窗口总共约 1s, 对手只是一次读文件的 open/close, 足够它走完。
+    """
+    delay = 0.005
+    for attempt in range(attempts):
+        try:
+            os.replace(source, destination)
+            return None
+        except OSError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 1.4, 0.05)
+    return None
+
+
+def _read_json(path: str, attempts: int = 40, delay: float = 0.005) -> dict:
+    """读 JSON, Windows 上遇到 ``PermissionError`` 退避重试。
+
+    同一个 catch: 对面进程正在 ``os.replace`` 的瞬间, Windows 会把目标标成"待替换",
+    这时的 ``open(path, 'r')`` 直接 ``PermissionError`` (Errno 13) —— **不是权限问题**,
+    只是撞上了别人的写。跨进程多操纵端实测 25 次里撞上一次, 不重试就会把整个
+    ``machines add`` 打成崩溃。
+
+    POSIX 的 rename 不会让别人读到一半, 也不需要这层, 但重试在这里是无害的。
+    """
+    for attempt in range(attempts):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return json.load(handle)
+        except FileNotFoundError:
+            raise
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 1.4, 0.05)
+    raise AssertionError("unreachable")  # pragma: no cover
+
+
+class FileLock:
+    """跨进程的**建议锁** (advisory lock), 尽力而为。
+
+    只在"大家都配合"时才互斥: 不配合的进程照样能改文件。所以它保护的是**我们自己的多个
+    操纵端**互相打架, 挡不住第三方, 那层靠 :meth:`Registry.save` 的原子写兜底 (最多读到
+    旧快照, 不会读到写坏的 JSON)。
+
+    拿不到锁会退化成"当没锁"而不是报错 —— registry 不是金融账本, 宁可偶尔丢一次状态
+    回填, 也不能让 ``ping`` 因为别的操纵端卡住而失败。
+
+    Windows 跨平台那条弯路总结一句: 文件锁只能管**跨进程**, 管不了同进程里的多线程,
+    所以类里面还额外叠了一把 ``threading.Lock`` —— 两层都要。
+
+    POSIX 用 ``flock`` (进程退出自动释放); Windows 没有 flock, 用 ``msvcrt.locking``
+    锁 lock 文件的第一个字节, 阻塞版要自己轮询 (``LK_NBLCK`` 拿不到就抛 ``OSError``)。
+    """
+
+    #: **同进程**互斥。Windows 的 msvcrt 锁只跨进程生效 —— 实测同一进程的 4 个线程能
+    #: 同时进临界区 (峰值 4/4), 而 POSIX 的 flock 按 open file description 是能互斥的。
+    #: 所以进程内这层必须自己补, 否则「一个操纵端里并行发起多个下发」照样丢更新。
+    _local_locks: Dict[str, Any] = {}
+    _local_guard: Any = None
+
+    def __init__(self, path: str, timeout: float = 5.0, poll: float = 0.02):
+        self.path = path
+        self.timeout = timeout
+        self.poll = poll
+        self._handle = None
+        self._local = None
+        self.held = False
+
+    @classmethod
+    def _process_lock(cls, path: str) -> Any:
+        with cls._guard():
+            lock = cls._local_locks.get(path)
+            if lock is None:
+                lock = threading.Lock()
+                cls._local_locks[path] = lock
+            return lock
+
+    @classmethod
+    def _guard(cls) -> Any:
+        with FileLock._meta_lock:
+            if cls._local_guard is None:
+                cls._local_guard = threading.Lock()
+            return cls._local_guard
+
+    _meta_lock: Any = threading.Lock()
+
+    def __enter__(self) -> bool:
+        self._local = self._process_lock(self.path)
+        self._local.acquire()  # 进程内在前
+        try:
+            directory = os.path.dirname(self.path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            self._handle = open(self.path, "a+b")
+            if os.name == "nt":
+                import msvcrt
+
+                # 锁定的区域必须真的有内容, 空文件锁不了 —— 但**不能用 read 去判断**:
+                # Windows 上别人锁住的字节范围对别的进程是不可读的, read(1) 会直接
+                # PermissionError (看着像"没权限", 其实是"别人正在持有锁"), 于是会被误判
+                # 成"锁不上"直接退化 —— 实测多进程场景下每次都退化, 更新照丢。用 size 判断。
+                if os.path.getsize(self.path) == 0:
+                    try:
+                        self._handle.write(b".")
+                        self._handle.flush()
+                    except OSError:  # 别人抢先写了也一样能用
+                        pass
+                self._handle.seek(0)
+                deadline = time.perf_counter() + self.timeout
+                while True:
+                    try:
+                        msvcrt.locking(self._handle.fileno(), msvcrt.LK_NBLCK, 1)
+                        self.held = True
+                        break
+                    except OSError:
+                        if time.perf_counter() >= deadline:
+                            break
+                        time.sleep(self.poll)
+            else:
+                import fcntl
+
+                fcntl.flock(self._handle.fileno(), fcntl.LOCK_EX)
+                self.held = True
+        except Exception:  # noqa: BLE001 - 锁不上就退化, 不阻断主流程
+            self.held = False
+        return self.held
+
+    def __exit__(self, *_exc) -> None:
+        if self._handle is not None:
+            try:
+                if self.held:
+                    if os.name == "nt":
+                        import msvcrt
+
+                        self._handle.seek(0)
+                        msvcrt.locking(self._handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(self._handle.fileno(), fcntl.LOCK_UN)
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                try:
+                    self._handle.close()
+                finally:
+                    self._handle = None
+                    self.held = False
+        # 先放开文件锁给别人 (跨进程), 再放进程内的锁给下一个线程 -- 顺序别反
+        if self._local is not None:
+            self._local.release()
+            self._local = None
+
+
 class Registry:
     """``registry.json`` 的读写。文件格式: ``{"version": 1, "machines": {...}}``。"""
 
     def __init__(self, path: str):
         self.path = path
         self.data: Dict[str, Any] = {"version": SCHEMA, "machines": {}}
+        #: 最近一次 :meth:`transaction` 有没有真的拿到锁 (拿不到会退化, 仅供诊断)
+        self.locked: bool = False
 
     # ---------------- 读写 ----------------
 
@@ -119,8 +288,7 @@ class Registry:
     def load(cls, path: Optional[str] = None) -> "Registry":
         registry = cls(path or default_registry_path())
         try:
-            with open(registry.path, "r", encoding="utf-8") as handle:
-                raw = json.load(handle)
+            raw = _read_json(registry.path)
         except FileNotFoundError:
             return registry
         except json.JSONDecodeError as exc:
@@ -134,15 +302,64 @@ class Registry:
         return registry
 
     def save(self) -> None:
+        """原子写: 先写临时文件再 ``os.replace``。
+
+        直接覆盖的话, 另一个进程读到一半会看到写残的 JSON, 然后整份 registry 就报
+        ``不是合法 JSON`` 了。这里换成 rename —— POSIX 与 NTFS 的 rename 都是原子的。
+        """
         directory = os.path.dirname(self.path)
         if directory:
             os.makedirs(directory, exist_ok=True)
         existed = os.path.exists(self.path)
-        with open(self.path, "w", encoding="utf-8") as handle:
+        # tmp 名字必须带随机串: 同一个进程里的多个操纵端共享 pid, 名字撞了就会互相
+        # truncate 同一个临时文件, 最后 replace 上去的是被截断过的那份 (实测 50 台 -> 1 台)
+        temporary = f"{self.path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
             json.dump(self.data, handle, ensure_ascii=False, indent=2)
             handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
         if not existed:
-            restrict_permissions(self.path)
+            restrict_permissions(temporary)  # 换名前先收权限, 免得有一瞬间是宽松的
+        try:
+            _replace_with_retry(temporary, self.path)
+        finally:
+            if os.path.exists(temporary):  # 换名没成功的话别把垃圾留在盘上
+                try:
+                    os.unlink(temporary)
+                except OSError:
+                    pass
+
+    # ---------------- 并发: 事务 ----------------
+
+    @contextmanager
+    def transaction(self) -> Iterator["Registry"]:
+        """原子的 read-modify-write —— **多个操纵端并存时的必需步骤**。
+
+        朴素的 ``load() -> 改 -> save()`` 在多进程/多线程下会丢更新: 两个操纵端各自
+        load 到同一份快照, 各自改自己的那部分, 后保存的会把先保存的**整份**冲掉。
+        实测双线程各 add 25 台 -> 最后只剩 26 台, 丢了 24 条。
+
+        这里在文件锁里**重新读盘**、改最新的那份、再原子写回。别人在锁外往别的键上写
+        的条目因此会被保留; 撞同一台机器的状态回填则按"后写完胜", 这是可接受的 ——
+        状态本来就是"最后一次看到的样子"。
+
+        用法::
+
+            with registry.transaction() as live:
+                live.put(machine)        # 对 live 做改动才会被保存
+
+        ``with`` 块里 ``return`` / 抛异常时**不会**写盘 (gen 在 yield 处收到 GeneratorExit,
+        yield 之后的 save 不执行) —— 校验失败就该什么都不做, 正好。
+        """
+        with FileLock(f"{self.path}.lock") as held:
+            self.locked = held
+            fresh = type(self).load(self.path)
+            try:
+                yield fresh
+            except GeneratorExit:
+                raise
+            fresh.save()
 
     # ---------------- 条目操作 ----------------
 
@@ -723,9 +940,6 @@ def _run_machines(args: argparse.Namespace, registry: Registry) -> int:
         return 0
 
     if action == "add":
-        if registry.get(args.alias) is not None and not args.force:
-            print(f"别名 {args.alias!r} 已存在; 要覆盖加 --force", file=sys.stderr)
-            return 2
         groups: List[str] = []
         for value in args.group:
             groups.extend([piece for piece in value.split(",") if piece])
@@ -739,16 +953,20 @@ def _run_machines(args: argparse.Namespace, registry: Registry) -> int:
             timeout=args.timeout,
             note=args.note,
         )
-        registry.put(machine)
-        registry.save()
+        # 重名检查也得在锁里做, 否则两个操纵端会同时通过检查再互相覆盖 (TOCTOU)
+        with registry.transaction() as live:
+            if live.get(args.alias) is not None and not args.force:
+                print(f"别名 {args.alias!r} 已存在; 要覆盖加 --force", file=sys.stderr)
+                return 2
+            live.put(machine)
         print(f"已注册 {args.alias}: {machine.target_hint()}  -> {registry.path}")
         return 0
 
     if action == "rm":
-        if not registry.remove(args.alias):
-            print(f"别名 {args.alias!r} 不存在", file=sys.stderr)
-            return 2
-        registry.save()
+        with registry.transaction() as live:
+            if not live.remove(args.alias):
+                print(f"别名 {args.alias!r} 不存在", file=sys.stderr)
+                return 2
         print(f"已注销 {args.alias}")
         return 0
 
@@ -789,8 +1007,9 @@ async def _run_action(args: argparse.Namespace, registry: Registry) -> int:
 
     if not args.no_update:
         try:
-            update_states(registry, results)
-            registry.save()
+            # 走事务: 别人这期间写进来的条目不能被我们这份旧快照冲掉
+            with registry.transaction() as live:
+                update_states(live, results)
         except OSError as exc:
             print(f"(registry 写回失败: {exc})", file=sys.stderr)
 

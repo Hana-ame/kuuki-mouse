@@ -85,7 +85,11 @@ kuuki remote 0.1.0 已启动
   客户端示例: python -m remote.client ws ping
 ```
 
-## 3. 命令行客户端 (调试用)
+## 3. 控制端: 命令行客户端 + 多机控制器
+
+### 3.1 `python -m remote.client` (单机调试级)
+
+一条命令打**一台**机器**一个** op，地址临时写在命令行上，**不记任何东西**。
 
 ```bash
 python -m remote.client ws ping
@@ -105,6 +109,32 @@ python -m remote.client grpc stream /tmp/frames --fps 2 --count 5
 ```
 
 带 token 时加 `--token XXX` (WS 拼进 URL + 握手头, gRPC 放进 metadata)。
+
+### 3.2 `python -m remote.ctl` (多机控制级)
+
+先把机器记进 registry (`~/.kuuki/registry.json`, `--registry` 可改), 之后按**别名 / 组 / 全体**
+分发同一条命令 —— 并发跑、逐台超时、**结果逐台汇总**, 并把 online/offline 写回 registry:
+
+```bash
+# 登记 (本机做受控端时就是 127.0.0.1)
+python -m remote.ctl machines add self      --transport ws   --endpoint ws://127.0.0.1:8765 -g local
+python -m remote.ctl machines add self-grpc --transport grpc --endpoint 127.0.0.1:50051      -g local
+python -m remote.ctl machines list
+
+python -m remote.ctl ping -a                    # 广播
+python -m remote.ctl info -g local              # 组播
+python -m remote.ctl pos self                   # 单发
+python -m remote.ctl shot out.png -a            # 多机自动插别名: out-self.png
+python -m remote.ctl watch frames -g local --fps 4 --count 10
+python -m remote.ctl move self 400 300 --duration .3
+```
+
+`op` / `check` / `shot` / `watch` / `tail` 这几个命令的目标要用 `-t/--to` / `-g` / `-a`
+(它们的位置参数是 op 名 / 键名 / 路径, 会被别名列表吞掉)。完整命令表与注释见
+[docs/puppet-multi-machine.md](docs/puppet-multi-machine.md) 第 4 节。
+
+> 2026-09-20 本机自控实测: 起一个 `python -m remote --no-peerjs`, 注册成 WS 与 gRPC
+> 两个别名, ping / info / 光标 / 键预检 / 截屏 / 连续抓帧全部通过。
 
 ## 4. WebSocket 协议
 
@@ -371,13 +401,15 @@ PNG 魔数正确; region 裁剪 + `max_width` 缩放 (320x200 区域 → 160x100
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 26 项 (33 个用例, 含参数化)
+python -m pytest test_remote.py -v      # 57 项 (含参数化; 其中 15 项专测控制端 ctl)
 python -m remote --selftest --selftest-input
 ```
 
 **2026-09-20 Windows 实测** (`.venv-win`, py3.10.7, pytest 9.1.1, 1680x1050):
 
 - 测试套 **32 passed / 1 skipped** (跳过的是 Linux/X11 专用的键预检用例)。
+  P3 控制端落地后是 **57 passed / 1 skipped** (新增 registry、目标解析、分发汇总、
+  命令翻译与端到端 15 项)。
 - 受控端正常启动 (`python -m remote --no-grpc --no-peerjs --ws-port 8766`),
   客户端 `python -m remote.client ws --url ws://127.0.0.1:8766 ping` 与同一命令换 `info`
   端到端都通, `info` 报 `os=Windows` / `clipboard_tool=clip`。

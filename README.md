@@ -182,13 +182,14 @@ remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键�
   ├─ ice.py        ICE 候选地址过滤 (自动排掉虚拟网卡)
   ├─ toast.py      被控端无焦点角标通知 (notify op)
   ├─ win/          WSL→Windows 实验桥 (host.py + winhost.ps1, 未接入服务端)
-  ├─ client.py     命令行客户端
+  ├─ client.py     命令行客户端 (单机调试级: 一条命令打一台一个 op)
+  ├─ ctl.py        多机控制端 (别名/组/广播 + 结果汇总 + online-offline 回填)
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
-test_remote.py   remote/ 扩展的测试 (26 项, 不动鼠标键盘; 含平台门禁与跨传输等价用例)
+test_remote.py   remote/ 扩展的测试 (57 项, 不动鼠标键盘; 含平台门禁与跨传输等价用例)
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
-docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机)
+docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机, P1-P3/P6 已落地)
 
 # ---- 调试 / 演示小工具 ----
 annotate.py      截图上叠坐标网格 + 标记目标点/色块, 核对"算出的坐标偏没偏"

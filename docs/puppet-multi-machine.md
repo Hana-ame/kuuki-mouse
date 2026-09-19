@@ -78,22 +78,54 @@ gRPC 把 `keys: "ctrl+shift+s"` 当成一个键名没拆分、`duration: 0` 被 
 |---|---|---|
 | `screen.monitors` | 屏幕枚举（多显示器坐标对齐要用） | 未实现，见第 8 节风险表 |
 
-## 4. 控制器 `kuuki_ctl`（新）
+## 4. 控制器 `remote.ctl`（P3，2026-09-20 落地）
 
 ```
-kuuki_ctl machines list | add <alias> --transport ws|grpc|peerjs --endpoint <url|ip|peer> [--token T] [--group g]
-kuuki_ctl <alias> ping | info | shot [out.png] | watch [--fps 2] [--count 10]
-kuuki_ctl <alias> move X Y [--duration .3] | click [--button right] [--clicks 2] [--hold .06]
-kuuki_ctl <alias> drag x1,y1,x2,y2 [--button left] [--duration .3] | dragp x1,y1;x2,y2;x3,y3
-kuuki_ctl <alias> scroll [--dx 0] [--dy 3] [--steps 5] [--x X] [--y Y]
-kuuki_ctl <alias> type "文本" | paste "中文" | combo ctrl+shift+s [--hold 200] | hold f2 500 | key f5
-kuuki_ctl all ping | all shot  | group <g> shot     # 广播 / 组播
-kuuki_ctl tail <alias>           # 连续 watch 存帧目录（回显窗口）
+# 先登记机器 (~/.kuuki/registry.json, 可用 --registry 改路径)
+python -m remote.ctl machines add pc1 --transport ws    --endpoint ws://192.168.1.20:8765 --token T
+python -m remote.ctl machines add pc2 --transport grpc  --endpoint 192.168.1.21:50051 --token T -g office
+python -m remote.ctl machines add pc3 --transport peerjs --endpoint kuuki-mouse-XXXX -g office
+python -m remote.ctl machines list            # 别名 / 传输 / 地址 / 组 / online-offline
+python -m remote.ctl machines show pc1        # (token 默认打码, --show-token 才显示)
+python -m remote.ctl machines rm pc3
+
+# 单发 / 广播 / 组播: 目标写在命令后, 或 -t <别名> / -g <组> / -a
+python -m remote.ctl ping pc1 pc2 pc3         # 单发多台
+python -m remote.ctl ping all                 # 广播
+python -m remote.ctl info -g office           # 组播
+python -m remote.ctl pos -a                   # 读光标
+
+# 动作 (同一套 op, 三传输共用)
+python -m remote.ctl move  pc1 400 300 --duration .3
+python -m remote.ctl move-rel pc1 --dx 5 --dy -5
+python -m remote.ctl click pc1 --button right --clicks 2
+python -m remote.ctl down pc1 | up pc1 --button left
+python -m remote.ctl scroll pc1 --dy 3 --steps 5 --x 800 --y 400
+python -m remote.ctl scroll-h pc1 --dx 4 --steps 2
+python -m remote.ctl drag  pc1 100 100 500 400 --duration .3
+python -m remote.ctl dragp pc1 "100,100;300,200;500,150" --duration .2
+python -m remote.ctl type  pc1 "hello" --interval 0.01
+python -m remote.ctl paste pc1 "中文走剪贴板"
+python -m remote.ctl key   pc1 f5 | key pc1 ctrl --action press
+python -m remote.ctl combo pc1 ctrl+shift+s --hold 200
+python -m remote.ctl hold  pc1 f2 500
+python -m remote.ctl check -a ctrl shift f5    # 键支持性预检, 不真按
+
+# 任意 op / 回显
+python -m remote.ctl op screen.size -a
+python -m remote.ctl shot  out.png -a                     # 多机自动插别名: out-pc1.png
+python -m remote.ctl watch frames -g office --fps 4 --count 10
+python -m remote.ctl tail  frames -t pc1                  # 一直抓到 Ctrl-C
 ```
 
-- 实现：复用 `remote/client.py` 的 `WsClient / GrpcClient / PeerJsClient`，新增多机分发层（registry 读写、并发分发、结果汇总）。
-- 截图回显：`shot` 存文件；`watch`/`tail` 用已有 `_write_frame` 连续落盘。
-- 统一超时与重试：每台 agent 动作默认 10s 超时，断线标记 offline。
+**注意 `op` 与 `check` 的目标只能用 `-t/-g/-a`**：它们的 op 名 / 键名本身是位置参数，再放一组位置参数当别名会被 argparse 吞掉（`shot` / `watch` / `tail` 同理，`路径` 在命令后、目标在 `-t/-g/-a`）。
+
+- 实现：`remote/ctl.py`，复用 `remote/client.py` 的 `WsClient / GrpcClient / PeerJsClient`，上面加一层多机分发：registry 读写、目标解析、**并发**分发（`--serial` 可串行）、按机器超时、**结果逐台汇总**、状态回填。
+- `GrpcClient` 是同步的（gRPC 库同步），并发时用 `asyncio.to_thread` 包住，不会堵住另两台的 asyncio 连接。
+- **超时与失败是逐台算的**：默认 10s（`machines add --timeout` 定义这台机器的默认值，单次可用全局 `--timeout` 覆盖）；超时或抛异常只标记**那一台**失败，不拖垮整批。结束时把 online/offline 与 `last_seen` / `last_error` 写回 registry（`machines list` 能看到，`--no-update` 可关）。
+- 截图回显：`shot` 存文件；`watch` / `tail` 按 `<目录>/<别名>/0001.png` 连续落盘（多机不会互相覆盖）。
+- registry 里的 token 是**明文**：新建时会收权限（POSIX 0600，Windows 用 icacls 断继承），不想落盘就让它读环境变量 `KUUKI_REMOTE_TOKEN`。
+- 退出码：全部成功 0；有机器失败 1；用法错误（未知别名 / 未知组 / `--args` 不是 JSON）2。
 
 ## 5. 目标端部署包
 
@@ -122,10 +154,10 @@ kuuki_ctl tail <alias>           # 连续 watch 存帧目录（回显窗口）
 
 1. ✅ **P1 `remote/input.py`**（2026-09-20 完成）：scroll 平滑多步（总量守恒）、drag 路径点、combo 的 `hold_ms`、`keyboard.hold` 长按 —— 带单测，测试用假鼠标键盘，不碰真实光标。
 2. ✅ **P2 `remote/service.py` + proto**（2026-09-20 完成）：新增 `mouse.scroll_h` / `keyboard.combo` / `keyboard.hold` 与别名；proto 补 `Combo` / `HoldKey` / `ScrollHorizontal` 三个 RPC 与 `optional` 字段；gRPC 客户端修掉组合键不拆分与 `duration: 0` 被吞两处偏差。
-3. **P3 `kuuki_ctl.py`**：registry + 单发/广播/组播 + watch 回显 ← **下一步**
+3. ✅ **P3 `remote/ctl.py`**（2026-09-20 完成）：registry + 目标解析 + 并发分发 + 结果汇总 + online/offline 回填 + `shot/watch/tail`。**本机自控已实测**（起一个本机 agent，注册成 `self`(WS) 与 `self-grpc`(gRPC) 两台，ping / info / pos / 键预检 / 截屏 / 连续抓帧全部 OK）。
 4. **P4 部署包**：pack/agent + PyInstaller + 启动脚本（agent 只支持 Windows，只需 `start-agent.bat`）
 5. **P5 验收靶**：target_events.html + verify_events.py + 三传输用例
-6. **P6 冒烟**：本机起两个不同房间码的 agent 实例，controller 分别连（双机占位）；真多机等有第二台机器再跑
+6. ✅ **P6 冒烟**（2026-09-20 完成了一半）：本机一个 agent 进程注册成**两个别名**（WS 与 gRPC 两条链路）已跑通；真多机、以及 PeerJS 走公网 broker 的跨网验证，等有第二台机器再补。
 
 ## 8. 风险与兜底
 
@@ -141,8 +173,10 @@ kuuki_ctl tail <alias>           # 连续 watch 存帧目录（回显窗口）
 
 - `remote/` 三传输 + op 注册表（2026-09-19 跨机 WS 实测：`ping` 通、1680×1050 截图 132ms；agent 侧现在只允许 Windows）
 - `remote/input.py` 完整动作集（2026-09-20：多步滚动 / 路径点拖动 / combo 的 `hold_ms` / `hold` 长按），
-  `test_remote.py` 26 项测试覆盖（含跨传输等价用例），全部用假鼠标键盘断言
+  `test_remote.py` 57 项测试覆盖（含跨传输等价用例与控制端用例），全部用假鼠标键盘断言
 - `remote/client.py` 的 `WsClient` / `GrpcClient` / `PeerJsClient`：P3 的分发层直接复用它，不用新写传输
+- `remote/ctl.py`（2026-09-20）：多机控制端 —— registry + 目标解析 + 并发分发 + 结果汇总，测试 57 项里的 15 项专测它
+- 三条踩过的坑已固化：`op` / `check` / `shot` 等命令的目标必须走 `-t/-g/-a`（位置参数互相吞）；测试里起 WS 服务端必须在**同一个协程**里跑完（`asyncio.run` 一结束就关 socket）；gRPC 的 `Ack{ok, message}` 里塞的是 JSON 字符串，客户端要拆回对象才能与 WS 的返回值比（`remote/client.py::_unwrap_ack`）
 - `click.html` + `p2p_clicktarget.py`：点击自验证靶（`_clicks.jsonl`）
 - `annotate.py`：截图 overlay 网格标注（排障用）
 - `remote/toast.py`：无焦点通知（操作前提示不抢焦点）

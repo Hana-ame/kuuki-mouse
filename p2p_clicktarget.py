@@ -22,7 +22,6 @@ import logging
 import os
 import sys
 import threading
-import time
 
 sys.path.insert(0, r"D:\Workplace\kuuki-mouse")
 logging.basicConfig(level=logging.WARNING)

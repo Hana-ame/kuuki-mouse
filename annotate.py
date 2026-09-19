@@ -13,9 +13,8 @@
 from __future__ import annotations
 
 import argparse
-import io
 import sys
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from PIL import Image, ImageDraw, ImageFont
 

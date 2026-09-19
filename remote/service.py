@@ -75,16 +75,14 @@ class RemoteService:
         screen: Optional[ScreenCapture] = None,
         controller=None,
         token: Optional[str] = None,
-        backend: str = "auto",
     ):
-        self.screen = screen or ScreenCapture(backend=backend)
+        self.screen = screen or ScreenCapture()
         self._controller = controller
         self.token = token
         self.handlers: Dict[str, Callable[[dict], dict]] = {
             "ping": self._op_ping,
             "info": self._op_info,
             "screen.size": self._op_screen_size,
-            "screen.monitors": self._op_screen_monitors,
             "screen.screenshot": self._op_screen_screenshot,
             "mouse.position": self._op_mouse_position,
             "mouse.move": self._op_mouse_move,
@@ -100,12 +98,12 @@ class RemoteService:
             "keyboard.paste": self._op_keyboard_paste,
             "keyboard.check": self._op_keyboard_check,
             "kuuki": self._op_kuuki,
+            "notify": self._op_notify,
         }
         self.aliases = {
             "screenshot": "screen.screenshot",
             "capture": "screen.screenshot",
             "size": "screen.size",
-            "monitors": "screen.monitors",
             "position": "mouse.position",
             "move": "mouse.move",
             "move_rel": "mouse.move_rel",
@@ -122,6 +120,7 @@ class RemoteService:
             "check": "keyboard.check",
             "keys": "keyboard.check",
             "sensor": "kuuki",
+            "popup": "notify",
         }
 
     # ---------------- 控制器 (延迟创建, 避免只截屏的场景也去加载 pynput) ----------------
@@ -196,12 +195,6 @@ class RemoteService:
     def _op_info(self, args: dict) -> dict:
         from .input import clipboard_tool
 
-        try:
-            monitors = [m.to_dict() for m in self.screen.monitors()]
-            screen_error = None
-        except Exception as exc:  # 截屏后端全挂时 info 仍应可用
-            monitors, screen_error = [], f"{exc.__class__.__name__}: {exc}"
-
         info = {
             "version": VERSION,
             "os": platform.system(),
@@ -211,9 +204,6 @@ class RemoteService:
             "user": os.environ.get("USER") or os.environ.get("USERNAME") or "",
             "cwd": os.getcwd(),
             "display": os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY") or "",
-            "monitors": monitors,
-            "screen_error": screen_error,
-            "capture_backends": self.screen.backend_report(),
             "clipboard_tool": (clipboard_tool() or (None, None))[0],
             "token_required": bool(self.token),
             "uptime_s": round(time.time() - _STARTED_AT, 3),
@@ -230,7 +220,6 @@ class RemoteService:
         """抓一帧, 返回 (元数据, 图片字节)。WS 二进制帧与 gRPC 都走这里。"""
         capture = self.screen.capture(
             region=args.get("region"),
-            monitor=_as_int(args.get("monitor"), "monitor", 0),
             fmt=_as_str(args.get("format", args.get("fmt")), "format", "png"),
             quality=_as_int(args.get("quality"), "quality", 80),
             max_width=args.get("max_width"),
@@ -243,10 +232,7 @@ class RemoteService:
 
     def _op_screen_size(self, args: dict) -> dict:
         width, height = self.screen.screen_size()
-        return {"width": width, "height": height, "backend": self.screen.active_backend().name}
-
-    def _op_screen_monitors(self, args: dict) -> dict:
-        return {"monitors": [m.to_dict() for m in self.screen.monitors()]}
+        return {"width": width, "height": height}
 
     def _op_screen_screenshot(self, args: dict) -> dict:
         capture, data = self.capture(args)
@@ -279,8 +265,10 @@ class RemoteService:
         button = _as_str(args.get("button"), "button", "left")
         clicks = _as_int(args.get("clicks", args.get("count")), "clicks", 1)
         interval = _as_float(args.get("interval"), "interval", 0.05)
-        done = self.controller.click(button, clicks, interval)
-        return {"button": button, "clicks": done}
+        # hold 默认 60ms: 瞬时 down/up 会被某些前端框架当成无效点击
+        hold = _as_float(args.get("hold"), "hold", 0.06)
+        done = self.controller.click(button, clicks, interval, hold)
+        return {"button": button, "clicks": done, "hold": hold}
 
     def _op_mouse_down(self, args: dict) -> dict:
         button = _as_str(args.get("button"), "button", "left")
@@ -350,6 +338,28 @@ class RemoteService:
         if isinstance(keys, str):
             keys = [keys]
         return self.controller.check_keys(keys)
+
+    # ---------------- 被控端提示 / 许可 ----------------
+    def _op_notify(self, args: dict) -> dict:
+        """在被控端屏幕角落弹一个无焦点角标 (只通知, 不等确认, 不阻塞)。
+
+        用自绘窗口而不是 Windows 系统弹窗 —— 系统弹窗会抢前台焦点, 把控制端
+        正要输入的内容带到别处。角标不抢焦点, 位置可选四个角, 多个通知纵向堆叠。
+        """
+        from .toast import notify, notify_supported
+
+        if not notify_supported():
+            raise RemoteError("unsupported", "角标通知需要被控端有 tkinter 图形环境")
+        message = _as_str(args.get("message", args.get("text")), "message", "")
+        if not message:
+            raise RemoteError("bad_request", "缺少参数 message")
+        detail = _as_str(args.get("detail"), "detail", "")
+        seconds = _as_float(args.get("seconds"), "seconds", 6.0)
+        corner = _as_str(args.get("corner"), "corner", "br")
+        if corner not in ("br", "tr", "tl", "bl"):
+            raise RemoteError("bad_request", "corner 必须是 br / tr / tl / bl 之一")
+        shown = notify(message, detail, seconds, corner)
+        return {"shown": shown, "corner": corner, "seconds": seconds}
 
     # ---------------- kuuki 老协议透传 ----------------
     def _op_kuuki(self, args: dict) -> dict:

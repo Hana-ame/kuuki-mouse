@@ -342,11 +342,22 @@ class Peer(AsyncIOEventEmitter):
 
     async def connect(self,
                       peer: str,
-                      options: PeerConnectOption = {}) -> DataConnection:
+                      options: PeerConnectOption = None) -> DataConnection:
         """Return a DataConnection to the specified remote peer.
 
         See documentation for a complete list of options.
+
+        NOTE (本仓库补丁 8): 上游默认值写成可变字面量 ``{}`` (dict), 但下面用
+        ``dataclasses.asdict(options)`` 展开 —— 传 dict 会直接
+        ``TypeError: asdict() should be called on dataclass instances``。
+        官方 JS 文档里的 ``{serialization: 'json'}`` 写法照抄到 Python 就必炸。
+        这里改成 ``None`` 默认 + 兼容 dict 入参。
         """
+        if options is None:
+            options = PeerConnectOption()
+        elif isinstance(options, dict):
+            # 兼容按 JS 习惯传 dict 的调用方
+            options = PeerConnectOption(**options)
         if self.disconnected:
             log.warning(
                 "You cannot connect to a new Peer because you called "

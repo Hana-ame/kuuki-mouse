@@ -369,3 +369,49 @@ def test_grpc_end_to_end():
                 assert exc.value.code() == grpc.StatusCode.UNAUTHENTICATED
     finally:
         server.stop(0.5)
+
+
+# ================================================================ PeerJS 分块
+
+
+def test_peerjs_chunker_roundtrip():
+    """分块协议: 小消息不分块, 大消息分块且可乱序重组, 缺块必须拒绝。"""
+    import os as _os
+
+    from remote.peerjs_server import PeerJsChunker, gen_room_code, split_message
+
+    assert len(gen_room_code()) == 5
+
+    small = {"id": 1, "ok": True, "result": {"x": 1}}
+    assert split_message(small) == [small]
+
+    blob = base64.b64encode(_os.urandom(200_000)).decode()
+    big = {"id": 2, "ok": True, "result": {"image_b64": blob, "width": 8, "height": 6}}
+    parts = split_message(big)
+    assert len(parts) > 3 and parts[0]["_chunk"] == "head" and parts[-1]["_chunk"] == "end"
+
+    # 顺序到达
+    chunker = PeerJsChunker()
+    out = None
+    for part in parts:
+        out = chunker.feed(json.loads(json.dumps(part))) or out
+    assert out is not None and out["result"]["image_b64"] == blob
+    assert out["result"]["width"] == 8
+
+    # 乱序到达
+    chunker = PeerJsChunker()
+    out = None
+    for part in [parts[0]] + list(reversed(parts[1:-1])) + [parts[-1]]:
+        out = chunker.feed(part) or out
+    assert out is not None and out["result"]["image_b64"] == blob
+
+    # 缺块 -> 拒绝, 不给坏数据
+    chunker = PeerJsChunker()
+    for part in parts[:-2]:
+        chunker.feed(part)
+    assert chunker.feed(parts[-1]) is None
+
+    # 普通消息透传
+    assert PeerJsChunker().feed({"id": 9, "ok": True, "result": {}}) == {
+        "id": 9, "ok": True, "result": {}
+    }

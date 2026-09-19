@@ -4,6 +4,7 @@
 
     python -m remote                          # WS 8765 + gRPC 50051
     python -m remote --no-grpc                # 只开 WebSocket
+    python -m remote --no-ws --no-grpc        # 只开 PeerJS (靠房间码配对, 不需要端口)
     python -m remote --ws-port 9000 --grpc-port 9001
     python -m remote --token secret           # 两个端口都要求 token
     python -m remote --allow-remote --token secret   # 绑 0.0.0.0 (危险, 必须带 token)
@@ -25,6 +26,7 @@ if __package__ in (None, ""):  # pragma: no cover
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from remote.grpc_server import GrpcServer  # noqa: E402
+from remote.peerjs_server import PeerJsServer  # noqa: E402
 from remote.service import RemoteError, RemoteService, VERSION  # noqa: E402
 from remote.ws_server import WsServer  # noqa: E402
 
@@ -42,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grpc-port", type=int, default=50051, help="gRPC 端口")
     parser.add_argument("--no-ws", action="store_true", help="不开 WebSocket")
     parser.add_argument("--no-grpc", action="store_true", help="不开 gRPC")
+    parser.add_argument(
+        "--no-peerjs", action="store_true",
+        help="不开 PeerJS (默认开; 走 0.peerjs.com 公开 broker, 无需端口/域名)",
+    )
+    parser.add_argument("--room", default=None, help="PeerJS 房间码 (默认随机生成)")
     parser.add_argument(
         "--token",
         default=os.environ.get("KUUKI_REMOTE_TOKEN"),
@@ -130,6 +137,7 @@ async def run_servers(args: argparse.Namespace) -> int:
     service = RemoteService(backend=args.backend, token=token)
     ws_server = None
     grpc_server = None
+    peerjs_server = None
 
     if not args.no_ws:
         ws_server = WsServer(service, host=host, port=args.ws_port, token=token, max_fps=args.max_fps)
@@ -137,12 +145,19 @@ async def run_servers(args: argparse.Namespace) -> int:
     if not args.no_grpc:
         grpc_server = GrpcServer(service, host=host, port=args.grpc_port, token=token)
         grpc_server.start()
+    if not args.no_peerjs:
+        # PeerJS 不需要本地端口 —— 它注册到公开 broker, 靠房间码配对
+        peerjs_server = PeerJsServer(service, room=args.room, token=token)
+        await peerjs_server.start()
+        await peerjs_server.wait_ready(timeout=20.0)
 
     endpoints = []
     if ws_server is not None:
         endpoints.append(ws_server.describe())
     if grpc_server is not None:
         endpoints.append(grpc_server.describe())
+    if peerjs_server is not None:
+        endpoints.append(peerjs_server.describe())
 
     if args.json:
         print(json.dumps({"version": VERSION, "endpoints": endpoints}, ensure_ascii=False, indent=2))
@@ -151,8 +166,11 @@ async def run_servers(args: argparse.Namespace) -> int:
         for endpoint in endpoints:
             if endpoint["transport"] == "websocket":
                 print(f"  WebSocket : {endpoint['url']}")
-            else:
+            elif endpoint["transport"] == "grpc":
                 print(f"  gRPC      : {endpoint['address']}  ({endpoint['service']})")
+            else:
+                state = "已注册" if endpoint["ready"] else "未注册"
+                print(f"  PeerJS    : {endpoint['peer_id']}  ({state}, {endpoint['broker']})")
         print(f"  token     : {'已设置' if token else '未设置 (仅回环安全)'}")
         print(f"  截屏后端  : {args.backend} (auto = mss -> pillow -> ffmpeg 自动降级)")
         print("  客户端示例: python -m remote.client ws ping")
@@ -178,6 +196,8 @@ async def run_servers(args: argparse.Namespace) -> int:
             await ws_server.close()
         if grpc_server is not None:
             grpc_server.stop(1.0)
+        if peerjs_server is not None:
+            await peerjs_server.close()
     return 0
 
 

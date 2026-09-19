@@ -1,14 +1,14 @@
 # kuuki-mouse · remote (远程控制扩展)
 
 把 kuuki-mouse 从"手机当空气鼠标"扩展成一台**本机的电脑操作服务**:
-用鼠标、键盘操作这台机器, 并且能把屏幕截图取回来; 通过 **WebSocket** 和 **gRPC**
-两个端口对外暴露, 供 agent / 脚本 / 别的机器调用。
+用鼠标、键盘操作这台机器, 并且能把屏幕截图取回来; 通过 **PeerJS** / **WebSocket** /
+**gRPC** 三种传输对外暴露, 供 agent / 脚本 / 别的机器调用。三者 op 语义完全一致。
 
 ```
-┌──────────────┐   WebSocket  ws://127.0.0.1:8765   ┌─────────────────────────┐
-│ agent / 脚本 │◄───────────────────────────────────►│  RemoteService (ops)    │
-│ 手机 web 页面│   gRPC       127.0.0.1:50051        │   ├─ InputController    │──► pynput ──► 鼠标/键盘
-└──────────────┘◄───────────────────────────────────►│   └─ ScreenCapture      │──► mss / Pillow / ffmpeg
+┌──────────────┐   PeerJS   kuuki-mouse-<房间码>    ┌─────────────────────────┐
+│ agent / 脚本 │   WebSocket  ws://127.0.0.1:8765    │  RemoteService (ops)    │
+│ 手机 / 异地  │◄───────────────────────────────────►│   ├─ InputController    │──► pynput ──► 鼠标/键盘
+└──────────────┘   gRPC       127.0.0.1:50051        │   └─ ScreenCapture      │──► mss / Pillow / ffmpeg
                                                      └─────────────────────────┘
 ```
 
@@ -37,6 +37,7 @@ pip install -r requirements.txt -r requirements-remote.txt
 ```bash
 python -m remote                          # WS 8765 + gRPC 50051, 只绑 127.0.0.1
 python -m remote --no-grpc                # 只要 WebSocket
+python -m remote --no-ws --no-grpc        # 只要 PeerJS (房间码配对, 不需要端口)
 python -m remote --ws-port 9000 --grpc-port 9001
 python -m remote --backend ffmpeg         # 指定截屏后端
 python -m remote --token secret           # 两个端口都要求 token
@@ -129,7 +130,61 @@ ws.onopen = () => ws.send(JSON.stringify({
 
 未通过鉴权只允许发 `auth`, 其余请求回 `unauthorized` 并断开 (1008)。
 
-## 5. gRPC 接口
+## 5. PeerJS 传输 (推荐跨网络用)
+
+和 WS/gRPC 并列的第三种传输, **op 语义完全一致**。走公开 cloud broker
+(`0.peerjs.com:443`), 靠房间码配对 —— **不需要端口、域名、证书、端口转发**。
+
+```bash
+python -m remote --no-ws --no-grpc        # 只开 PeerJS, 启动时打印房间码
+python -m remote --no-ws --no-grpc --room ABCDE
+```
+
+主机 id = `kuuki-mouse-<房间码>`, 客户端用随机 id 连过来:
+
+```python
+import asyncio
+from remote.peerjs_client import PeerJsClient
+
+async def main():
+    async with PeerJsClient("kuuki-mouse-ABCDE", token="secret") as client:
+        print(await client.call("mouse.position"))
+        await client.call("mouse.move", {"x": 400, "y": 300})
+        await client.call("keyboard.type", {"text": "hello"})
+        png = await client.screenshot({"format": "jpeg", "quality": 70, "max_width": 1280})
+        open("shot.jpg", "wb").write(png)
+
+asyncio.run(main())
+```
+
+### ⚠️ Python fork 的两个硬限制 (决定了协议长相)
+
+1. **只能 JSON 序列化** —— fork 里 `SerializationType.Binary` 的收发代码是**注释掉的**,
+   所以图片必须 base64 (比 WS 的二进制帧大约 +33%)。
+2. **库内分块也是注释掉的** —— `DataConnection.handleMessage` 里处理 `__peerData`
+   的那段被注释, 所以**大消息要自己在协议层分块**。
+
+因此 PeerJS 传输多了一层分块 (WS 侧没有):
+
+```
+{"_chunk":"head","_id":"c1","total":85,"size":691816,"header":{"id":1,"ok":true}}
+{"_chunk":"data","_id":"c1","n":0,"d":"<base64 片段>"}
+...
+{"_chunk":"end","_id":"c1"}
+```
+
+超过 60KB 的响应才分块, 每块 8KB; 带 `_chunk` 的消息与普通消息不会撞车。
+**实测**: 1600x1200 噪声 PNG → 691KB base64 → 87 块 → 完整重组且图片可解码;
+乱序到达也能重组, 缺块则明确丢弃 (不给坏数据)。
+
+### fork 补丁 8: `peer.connect()` 传 dict 必炸
+
+上游 `Peer.connect(peer, options)` 默认值是可变字面量 `{}` (dict), 实现里却调
+`dataclasses.asdict(options)` —— 照抄 JS 文档的 `{serialization:'json'}` 会直接
+`TypeError: asdict() should be called on dataclass instances`。已修: 默认改 `None`
+并兼容 dict 入参。
+
+## 6. gRPC 接口
 
 服务 `kuuki.remote.v1.RemoteControl`, 定义在
 [`remote/proto/kuuki_remote.proto`](proto/kuuki_remote.proto)。
@@ -153,7 +208,7 @@ ws.onopen = () => ws.send(JSON.stringify({
 > ——按"缺省即 false"读即可。WS 侧没有这个问题 (显式给 `false`)。
 > 客户端已用 `preserving_proto_field_name=True`, 所以字段名与 WS 一样是 snake_case。
 
-## 6. 操作 (op) 一览
+## 7. 操作 (op) 一览
 
 WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 
@@ -180,7 +235,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `keyboard.check` *`check`/`keys`* | `keys` 或 `key` | **预检**键能不能发 (不按键) |
 | `kuuki` *`sensor`* | `message` | 老协议透传 |
 
-## 7. 截屏后端与已知限制
+## 8. 截屏后端与已知限制
 
 ### 后端自动降级
 
@@ -236,25 +291,25 @@ X11 下 pynput 打不出中文, 用 `keyboard.paste`: 写剪贴板 + 发 `Ctrl+V
 剪贴板工具探测顺序 `wl-copy` → `xclip` → `xsel` → `pbcopy` → `clip`
 (本机探测到 `wl-copy`)。`info.clipboard_tool` 可查。
 
-## 8. 安全
+## 9. 安全
 
 - 默认只绑 `127.0.0.1`。
 - 不设 token 时**任何能连到该端口的本机进程都能控制你的鼠标键盘并读屏**。
 - 要暴露到网络必须 `--allow-remote --token <强随机值>`, 且建议再套一层 SSH 隧道 / 反向代理。
 - gRPC 用的是 `insecure_channel` (明文), token 只是防误连, 不是加密; 跨机请走隧道。
 
-## 9. 测试与验证状态
+## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 13 项
+python -m pytest test_remote.py -v      # 14 项
 python -m remote --selftest --selftest-input
 ```
 
 验证状态: **2026-09-19 在本机 (WSL2/WSLg, conda py3.12, `DISPLAY=:0`) 实测通过**。
 
-- `test_remote.py` 13 项全过 (键名解析 / 区域 / 编码 / 裁剪缩放 / 光标叠加 /
+- `test_remote.py` 14 项全过 (键名解析 / 区域 / 编码 / 裁剪缩放 / 光标叠加 /
   服务调度 / 请求信封与 batch / kuuki 透传 / 键预检 / WS 帧编解码 / WS 端到端 /
-  gRPC 端到端含流式与鉴权失败)。
+  gRPC 端到端含流式与鉴权失败 / PeerJS 分块协议)。
 - 真实抓屏: ffmpeg 后端 1680x1050, PNG 魔数正确。
 - 真实鼠标: 移动到屏幕中心再回原位, 位置读数一致。
 - 真实键盘: 用 `pynput.keyboard.Listener` (XRecord) 抓 XTEST 注入事件,

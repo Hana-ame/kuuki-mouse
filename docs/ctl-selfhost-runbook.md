@@ -13,9 +13,10 @@
 | 和 `remote.client` 的区别 | `remote.client` 是**单机调试级**（地址写在命令行上，一条命令打一个 op）；`remote.ctl` 是**多机控制级**。两者不重叠，别搞混 |
 | registry 在哪 | `~/.kuuki/registry.json`（环境变量 `KUUKI_REGISTRY` 或 `--registry` 可改） |
 | 退出码 | `0` 全成功 / `1` 有机器执行失败 / `2` 用法错误（未知别名、未知组、坏 JSON）/ `130` Ctrl-C |
-| 测试基线 | `python -m pytest test_remote.py -q` → **57 passed / 1 skipped**（跳过的是 Linux-X11 专用键预检） |
-| 已实测 | WS + gRPC 两条链路本机自控：ping / info / 光标 / 键预检 / 截屏 / 连续抓帧 / 零位移输入 |
-| 未实测 | PeerJS 跨网分支（只做了接口对齐）、真多机（本机只有一台） |
+| 测试基线 | `python -m pytest test_remote.py -q` → **84 passed / 1 skipped**（跳过的是 Linux-X11 专用键预检） |
+| 已实测 | WS + gRPC 本机自控：ping / info / 光标 / 键预检 / 截屏 / 连续抓帧 / 零位移输入 |
+| 已实测 | PeerJS：回环 13 项 + 真机自检 `python -m remote.peerjs_selftest`（连公开 broker，192KB 截图分块传送逐字节相同）→ 见 `docs/peerjs-analysis.md` |
+| 未实测 | 跨 NAT 的 PeerJS（本机只有一台）、真多机（本机只有一台） |
 
 ---
 
@@ -455,7 +456,8 @@ registry（`C:\Users\lumin\.kuuki\registry.json`）里留着 `self` / `self-grpc
 
 ## 6. 还没验证的部分
 
-- **PeerJS 跨网**：`transport=peerjs` 的分支只做了接口对齐（房间码形如 `kuuki-mouse-<码>`，走 `0.peerjs.com` 公开 broker），本机没真跑过。要验得有外网通路。
+- **PeerJS 跨 NAT**：本机同机两端已经真跑通了（见 `docs/peerjs-analysis.md`），但同机 WebRTC 走 host 候选，跨网才真的需要 STUN 打洞 —— 得有第二台机器或另一条网络才能验。
+- **PeerJS 弱网**：broker 断连、ICE 失败后的重连没验过；现在的行为是抛超时、标 offline，不重试。
 - **真多机**：本机只有一台，所谓「两台」是同一台的两个别名。多机的并发分发、连接池、offline 标记都在单元测试里用假 worker 覆盖过，但没有真实第二台机器背书。
 - **连接池**：现在每条命令各建一次连接。机器少无所谓，机器多/命令密会明显慢，属于后续优化项。
 
@@ -470,7 +472,8 @@ registry（`C:\Users\lumin\.kuuki\registry.json`）里留着 `self` / `self-grpc
 | `docs/puppet-multi-machine.md` | 多机方案总纲（第 4 节控制端命令表，第 9 节踩过的坑） |
 | `remote/README.md` | remote 扩展完整文档（3.1 单机调试级 `remote.client`，3.2 多机控制级 `remote.ctl`） |
 | `remote/ctl.py` | 控制端实现，命令 → op 的翻译集中在 `_machine_op()` |
-| `test_remote.py` | 57 项测试，含控制端的端到端用例 |
+| `test_remote.py` | 84 项测试，含控制端与 PeerJS 的端到端用例 |
+| `remote/peerjs_selftest.py` | PeerJS 真机自检（连公开 broker，假屏幕假输入） |
 | `check_ctl_docs.py` | 校验文档代码块中的命令是否还被 parser 认得 |
 
 > 建议把 `python check_ctl_docs.py` 和 `python -m pytest test_remote.py -q` 一起当作改完 ctl 的收尾动作 —— 这条复现指南就是这么维持不烂的。

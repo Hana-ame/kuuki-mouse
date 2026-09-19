@@ -185,9 +185,10 @@ remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键�
   ├─ client.py     命令行客户端 (单机调试级: 一条命令打一台一个 op)
   ├─ ctl.py        多机控制端 (别名/组/广播 + 结果汇总 + online-offline 回填)
   ├─ dummy.py      仿真受控端 (没有真设备时的替身, 一次起 N 台给多机/多操纵端测试用)
+  ├─ peerjs_selftest.py  PeerJS 真机自检 (连公开 broker; 假屏幕假输入, 不动真实光标)
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
-test_remote.py   remote/ 扩展的测试 (70 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端用例)
+test_remote.py   remote/ 扩展的测试 (84 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端/PeerJS 回环用例)
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机, P1-P3/P6 已落地)

@@ -419,7 +419,7 @@ PNG 魔数正确; region 裁剪 + `max_width` 缩放 (320x200 区域 → 160x100
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 57 项 (含参数化; 其中 15 项专测控制端 ctl)
+python -m pytest test_remote.py -v      # 84 项 (含参数化; 15 项专测控制端, 13 项专测 PeerJS)
 python -m remote --selftest --selftest-input
 ```
 

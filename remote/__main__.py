@@ -68,6 +68,28 @@ def platform_refusal(platform: str | None = None) -> str | None:
     )
 
 
+def force_utf8_stdio() -> None:
+    """把 stdout / stderr 强制成 UTF-8 输出。
+
+    不修会怎样: 帮助文字、错误提示、``--json`` 里的主机名/路径都可能是中文, 而 Windows
+    控制台的代码页由系统语言决定 —— 英文版是 cp1252, 一个中文都编码不了。结果就是
+    ``--help`` 这种最该稳定的命令直接 UnicodeEncodeError 崩掉, 用户连帮助都看不到
+    (CI 的 windows-latest runner 就是英文系统, 第一次跑构建就撞在这个上)。
+
+    ``errors="replace"`` 是最后一道保险: 万一终端编码真的不支持, 也好歹把命令跑完,
+    而不是抛异常退出。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        # 被 pytest 的 capsys 之类替换过的流没有 reconfigure, 跳过即可
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # pragma: no cover - 流已关闭 / detach
+            pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m remote",
@@ -233,6 +255,8 @@ async def run_servers(args: argparse.Namespace) -> int:
 
 
 def main(argv=None) -> int:
+    # 必须在 parse_args 之前: --help / --version 就在 parse_args 里输出并退出
+    force_utf8_stdio()
     args = build_parser().parse_args(argv)
     # 平台门禁: 放在 --help/--version 之后 (那两个在 parse_args 内就退出了, 不受影响),
     # 但排在 --selftest 与起服务之前 —— 自检同样会碰屏幕和输入, 非 Windows 无从谈起。

@@ -1461,3 +1461,58 @@ def test_ctl_peerjs_branch_end_to_end(tmp_path, monkeypatch):
     assert sorted(os.listdir(os.path.join(frames, "px"))) == ["0001.png", "0002.png"]
 
     assert ctl.Registry.load(registry).get("px").state == "online"
+
+
+# ================================================================ 终端编码
+#
+# 受控端是要分发到别人机器上的, 那台机器的系统语言不可控。中文 Windows 的代码页能编码
+# 中文, 英文 Windows 是 cp1252 —— 一个中文都编码不了。帮助文字 / 错误提示 / --json 里的
+# 主机名都有中文, 不处理的话 argparse 打帮助时直接 UnicodeEncodeError, 连 --help 都用不了
+# (CI 的 windows-latest 就是英文系统, 第一次构建就撞在这个上)。
+
+
+def test_force_utf8_stdio_makes_chinese_printable():
+    """把 stdout 强制成 UTF-8: 中文能写进去, 而不是抛 UnicodeEncodeError。"""
+    import io
+
+    gate = pytest.importorskip("remote.__main__")
+
+    original = sys.stdout
+    fake = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    try:
+        sys.stdout = fake
+        gate.force_utf8_stdio()
+        assert sys.stdout.encoding.lower() == "utf-8"
+        sys.stdout.write("受控端只支持 Windows")  # 修之前这一步就炸
+    finally:
+        sys.stdout = original
+
+
+def test_help_survives_a_non_utf8_console():
+    """端到端: cp1252 终端上跑 --help, 要正常退出 (argparse 打印帮助即 SystemExit(0))。"""
+    import io
+
+    gate = pytest.importorskip("remote.__main__")
+
+    original = sys.stdout
+    try:
+        sys.stdout = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+        with pytest.raises(SystemExit) as excinfo:
+            gate.main(["--help"])
+        assert excinfo.value.code == 0
+    finally:
+        sys.stdout = original
+
+
+def test_force_utf8_stdio_tolerates_replaced_streams():
+    """流被换掉时 (pytest 的 capsys 就没有 reconfigure) 要静默跳过, 不能反过来炸掉测试。"""
+    import io
+
+    gate = pytest.importorskip("remote.__main__")
+
+    original = sys.stdout
+    try:
+        sys.stdout = io.StringIO()  # 没有 reconfigure
+        gate.force_utf8_stdio()  # 不抛即为通过
+    finally:
+        sys.stdout = original

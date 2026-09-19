@@ -1,12 +1,14 @@
-"""``python -m remote`` —— 同时启动 WebSocket 与 gRPC 两个端口。
+"""``python -m remote`` —— 默认同时启动 WebSocket、gRPC 与 PeerJS 三个传输。
 
 默认**只绑 127.0.0.1**; 要给别的机器用必须显式 ``--allow-remote`` 且设置 token。
+PeerJS 不需要本地端口 —— 它注册到公开 broker, 靠房间码配对。
 
-    python -m remote                          # WS 8765 + gRPC 50051
-    python -m remote --no-grpc                # 只开 WebSocket
+    python -m remote                          # WS 8765 + gRPC 50051 + PeerJS (默认全开)
+    python -m remote --no-peerjs              # 只开 WS + gRPC 两个本地端口
+    python -m remote --no-grpc --no-peerjs    # 只开 WebSocket
     python -m remote --no-ws --no-grpc        # 只开 PeerJS (靠房间码配对, 不需要端口)
     python -m remote --ws-port 9000 --grpc-port 9001
-    python -m remote --token secret           # 两个端口都要求 token
+    python -m remote --token secret           # 三个传输都要求 token
     python -m remote --allow-remote --token secret   # 绑 0.0.0.0 (危险, 必须带 token)
     python -m remote --selftest               # 只做自检: 报告后端 + 抓一帧, 不动鼠标
     python -m remote --selftest --selftest-input     # 额外测一次鼠标移动(会动光标)
@@ -36,7 +38,7 @@ log = logging.getLogger("kuuki.remote")
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m remote",
-        description="kuuki-mouse 远程控制扩展: 鼠标/键盘控制 + 截屏, 暴露 WebSocket 与 gRPC 端口",
+        description="kuuki-mouse 远程控制扩展: 鼠标/键盘控制 + 截屏, 暴露 WebSocket / gRPC / PeerJS 三种传输",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")

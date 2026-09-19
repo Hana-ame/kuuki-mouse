@@ -21,25 +21,34 @@
   - **GitHub Pages** — 手机页面托管
 - 二维码内容 = `https://<你的用户名>.github.io/<仓库名>/#/<房间码>`, 手机扫码即配对。
 
-## 扩展: 本机远程控制 (remote/) — 鼠标键盘 + 截屏, WS / gRPC 双端口
+## 扩展: 本机远程控制 (remote/) — 鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输
 
 除空气鼠标之外, 本仓库还提供一个**本机电脑操作服务**: 用鼠标键盘操作这台机器、
-把屏幕截图取回来, 通过 **WebSocket (默认 8765)** 与 **gRPC (默认 50051)** 暴露,
-供 agent / 脚本 / 别的机器调用。
+把屏幕截图取回来, 供 agent / 脚本 / 别的机器调用。**三种传输默认全开**:
+
+| 传输 | 默认端点 | 适用场景 |
+|---|---|---|
+| WebSocket | `ws://127.0.0.1:8765` | 最常用, JSON + 二进制截屏帧 + 推流 |
+| gRPC | `127.0.0.1:50051` | 强类型接口, 服务端流式推帧 |
+| PeerJS | 无本地端口 (走 `0.peerjs.com` 公开 broker) | 跨网络免端口转发/免域名, 靠房间码配对 |
 
 ```bash
 pip install -r requirements.txt -r requirements-remote.txt
-python -m remote                  # 同时起 ws://127.0.0.1:8765 与 127.0.0.1:50051
-python -m remote --selftest       # 自检: 报告截屏后端 + 抓一帧 (不动鼠标)
-python -m remote.client ws ping   # 命令行客户端
+python -m remote                     # 默认三个一起起: WS 8765 + gRPC 50051 + PeerJS 房间码
+python -m remote --no-peerjs         # 只要本机两个端口, 不连公开 broker
+python -m remote --no-ws --no-grpc   # 只开 PeerJS (不需要任何开放端口)
+python -m remote --room ABCD123      # 指定 PeerJS 房间码 (默认随机生成)
+python -m remote --selftest          # 自检: 报告截屏后端 + 抓一帧 (不动鼠标)
+python -m remote.client ws ping      # 命令行客户端
 ```
 
 - 操作: 鼠标绝对/相对移动、点击/按住/滚轮/拖拽, 键盘输入/单键/组合键/剪贴板粘贴, 截屏 (区域/缩放/多格式/推流)。
 - 兼容原空气鼠标协议: 老协议 JSON (`t`/`mouse`/`text`/`key`) 会被直接路由到
   `app.handle_message`, 所以 `web/` 页面可以不走 PeerJS, 直接把传感器数据发到本机 WS。
 - 默认只绑 `127.0.0.1`; 暴露到网络必须 `--allow-remote --token <随机值>`。
+  PeerJS 走的是出站连接、不需要开放入站端口, 但同样建议带 token。
 
-完整协议、op 一览、截屏后端降级与本机实测结论 (含 WSLg 的坑) 见
+完整协议、op 一览、截屏后端降级、PeerJS 分块传输与本机实测结论 (含 WSLg 的坑) 见
 [remote/README.md](remote/README.md)。
 
 ## 快速开始
@@ -192,7 +201,7 @@ requirements.txt / requirements-remote.txt  依赖 (后者为 remote/ 扩展所�
 pip 上的 peerjs-python (1.5.1) 是把 JS 版 PeerJS 直接翻译的移植版, 维护停滞,
 在 **Python 3.12 + 新版依赖库 (websockets 17 / aiortc / pyee 13)** 下有一串兼容问题。
 与其每次重装都跑脚本改 site-packages, 不如直接把源码 fork 进仓库 (`peerjs/`),
-补丁已固化在源码里, 换机器/重装环境都不会丢。共修了 7 处:
+补丁已固化在源码里, 换机器/重装环境都不会丢。共修了 8 处:
 
 1. `PeerOptions.config` 可变默认值 — py3.12 的 dataclass 直接报错 → `default_factory`
 2. peerjs 用顶层 `from pyee import AsyncIOEventEmitter`, 但 pyee≥12 移除了顶层导出, 且
@@ -203,6 +212,9 @@ pip 上的 peerjs-python (1.5.1) 是把 JS 版 PeerJS 直接翻译的移植版, 
 5. `socket._wsOpen()` 用了 websockets≥13 已删除的 `.open` → 改用 `state == State.OPEN`
 6. offer payload 直接塞 `RTCSessionDescription` 对象 (不能 JSON 序列化) → `object_to_dict()`
 7. `dataconnection.handleMessage` 对 dict 用 `payload.sdp` 属性访问 → `payload.get('sdp')`
+8. `Peer.connect(peer, options)` 的 `options` 默认值是 dict `{}`, 实现里却对它调
+   `dataclasses.asdict(options)` —— 照抄 JS 文档的 `{serialization: "json"}` 会直接
+   `TypeError: asdict() should be called on dataclass instances` → 默认改 `None` 并兼容 dict 入参
 
 ### fork 来源与版本差别
 
@@ -219,7 +231,7 @@ pip 上的 peerjs-python (1.5.1) 是把 JS 版 PeerJS 直接翻译的移植版, 
   不改动任何 PeerJS 服务器协议逻辑)。
 - **与 pip 版 peerjs 的区别**: pip 版无法在 py3.12 + 新依赖下直接运行 (需 `--no-deps` + 手工改源码);
   本 fork 开箱即用, 且不需要 `pip install peerjs`。
-- **后续同步上游**: 上游若有新版本, 把新源码拷进 `peerjs/` 后重新确认这 7 处补丁仍在即可
+- **后续同步上游**: 上游若有新版本, 把新源码拷进 `peerjs/` 后重新确认这 8 处补丁仍在即可
   (可 `grep` 上面的关键词核对)。
 
 fork 版本同 JS 版 PeerJS 服务器协议互通 (手机浏览器用官方 JS 版), 无兼容问题。

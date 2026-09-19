@@ -21,6 +21,27 @@
   - **GitHub Pages** — 手机页面托管
 - 二维码内容 = `https://<你的用户名>.github.io/<仓库名>/#/<房间码>`, 手机扫码即配对。
 
+## 扩展: 本机远程控制 (remote/) — 鼠标键盘 + 截屏, WS / gRPC 双端口
+
+除空气鼠标之外, 本仓库还提供一个**本机电脑操作服务**: 用鼠标键盘操作这台机器、
+把屏幕截图取回来, 通过 **WebSocket (默认 8765)** 与 **gRPC (默认 50051)** 暴露,
+供 agent / 脚本 / 别的机器调用。
+
+```bash
+pip install -r requirements.txt -r requirements-remote.txt
+python -m remote                  # 同时起 ws://127.0.0.1:8765 与 127.0.0.1:50051
+python -m remote --selftest       # 自检: 报告截屏后端 + 抓一帧 (不动鼠标)
+python -m remote.client ws ping   # 命令行客户端
+```
+
+- 操作: 鼠标绝对/相对移动、点击/按住/滚轮/拖拽, 键盘输入/单键/组合键/剪贴板粘贴, 截屏 (区域/缩放/多格式/推流)。
+- 兼容原空气鼠标协议: 老协议 JSON (`t`/`mouse`/`text`/`key`) 会被直接路由到
+  `app.handle_message`, 所以 `web/` 页面可以不走 PeerJS, 直接把传感器数据发到本机 WS。
+- 默认只绑 `127.0.0.1`; 暴露到网络必须 `--allow-remote --token <随机值>`。
+
+完整协议、op 一览、截屏后端降级与本机实测结论 (含 WSLg 的坑) 见
+[remote/README.md](remote/README.md)。
+
 ## 快速开始
 
 ### 1. PC 端
@@ -135,6 +156,16 @@ controller.py    鼠标控制 (pynput 封装)
 peerjs/          peerjs-python 的 fork (含 py3.12 兼容补丁, 见下)
 web/             手机页面 (GitHub Pages 发布内容, 即旧 www/ 的替代)
 test_attitude.py 姿态解算单元测试 (port of verify-attitude.mjs)
+remote/          本机远程控制扩展 (鼠标键盘 + 截屏, WebSocket / gRPC 双端口)
+  ├─ screen.py     截屏后端 (mss / Pillow / ffmpeg x11grab) + 裁剪/缩放/编码
+  ├─ input.py      输入控制 (扩展 controller.PynputMouseController)
+  ├─ service.py    操作注册表 (op 调度, WS 与 gRPC 共用)
+  ├─ ws_server.py  WebSocket 服务端 (JSON + 二进制截屏帧 + 推流 + 鉴权)
+  ├─ grpc_server.py gRPC 服务端 (含服务端流式截屏)
+  ├─ client.py     命令行客户端
+  ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
+  └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
+test_remote.py   remote/ 扩展的测试 (13 项, 不动鼠标键盘)
 .github/workflows/pages.yml  push 到 master 自动部署 web/ → GitHub Pages
 ```
 

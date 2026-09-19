@@ -1,0 +1,23 @@
+# kuuki-mouse 远程控制扩展的额外依赖 (WebSocket + gRPC + 截屏)
+#
+# 与 requirements.txt 的关系:
+#   - requirements.txt 里的 pynput / Pillow 已经覆盖了输入控制与图片编码, 不用重复装
+#   - websockets 原本只是 peerjs fork 的隐式依赖, 这里显式写出来
+#
+# 安装: pip install -r requirements.txt -r requirements-remote.txt
+#
+# 说明:
+#   - mss 是**可选**的截屏后端 (跨平台, 走 XShm/Win32/CoreGraphics, 最快)。
+#     没装也能用: remote/screen.py 会自动降级到 Pillow.ImageGrab 或 ffmpeg x11grab。
+#     本机 (WSLg) 实测 Pillow.ImageGrab 会 BadMatch, 所以 Linux 上更推荐装 mss。
+#   - grpcio-tools 只在需要重新生成 proto 存根时才要 (bash remote/proto/gen_proto.sh)。
+
+websockets>=13
+grpcio>=1.60
+protobuf>=5.26
+
+# 可选: 更快的截屏后端
+mss>=9.0
+
+# 可选: 只在改 proto 后重新生成存根时需要
+# grpcio-tools>=1.60

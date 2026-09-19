@@ -1,0 +1,265 @@
+# kuuki-mouse · remote (远程控制扩展)
+
+把 kuuki-mouse 从"手机当空气鼠标"扩展成一台**本机的电脑操作服务**:
+用鼠标、键盘操作这台机器, 并且能把屏幕截图取回来; 通过 **WebSocket** 和 **gRPC**
+两个端口对外暴露, 供 agent / 脚本 / 别的机器调用。
+
+```
+┌──────────────┐   WebSocket  ws://127.0.0.1:8765   ┌─────────────────────────┐
+│ agent / 脚本 │◄───────────────────────────────────►│  RemoteService (ops)    │
+│ 手机 web 页面│   gRPC       127.0.0.1:50051        │   ├─ InputController    │──► pynput ──► 鼠标/键盘
+└──────────────┘◄───────────────────────────────────►│   └─ ScreenCapture      │──► mss / Pillow / ffmpeg
+                                                     └─────────────────────────┘
+```
+
+**只做三件事**: ① 控制鼠标键盘; ② 抓屏并编码返回; ③ 顺带兼容原有空气鼠标协议
+(老协议 JSON 直接透传给 `app.handle_message`, 所以 `web/` 页面可以不用 PeerJS,
+直接把传感器数据发到这个 WS)。
+
+---
+
+## 1. 安装
+
+```bash
+pip install -r requirements.txt -r requirements-remote.txt
+```
+
+- `pynput` / `Pillow` 已由 `requirements.txt` 提供, 不重复安装。
+- `mss` 是可选后端, 没装会自动降级 (见第 6 节)。
+- gRPC 存根已随仓库提供 (`remote/proto/kuuki_remote_pb2*.py`); 改过 `.proto` 后重新生成:
+
+  ```bash
+  bash remote/proto/gen_proto.sh
+  ```
+
+## 2. 启动
+
+```bash
+python -m remote                          # WS 8765 + gRPC 50051, 只绑 127.0.0.1
+python -m remote --no-grpc                # 只要 WebSocket
+python -m remote --ws-port 9000 --grpc-port 9001
+python -m remote --backend ffmpeg         # 指定截屏后端
+python -m remote --token secret           # 两个端口都要求 token
+python -m remote --allow-remote --token secret   # 绑 0.0.0.0 (必须带 token)
+python -m remote --selftest               # 自检: 报告后端 + 抓一帧, 不动鼠标
+python -m remote --selftest --selftest-input     # 额外测一次鼠标移动(会动光标)
+```
+
+启动后打印:
+
+```
+kuuki remote 0.1.0 已启动
+  WebSocket : ws://127.0.0.1:8765/
+  gRPC      : 127.0.0.1:50051  (kuuki.remote.v1.RemoteControl)
+  token     : 未设置 (仅回环安全)
+  截屏后端  : auto (auto = mss -> pillow -> ffmpeg 自动降级)
+```
+
+## 3. 命令行客户端 (调试用)
+
+```bash
+python -m remote.client ws ping
+python -m remote.client ws info
+python -m remote.client ws op mouse.position
+python -m remote.client ws op mouse.move --args '{"x":400,"y":300,"duration":0.2}'
+python -m remote.client ws op keyboard.check --args '{"keys":["a","enter","f13","中"]}'
+python -m remote.client ws screenshot /tmp/shot.png --max-width 1280 --draw-cursor
+python -m remote.client ws watch /tmp/frames --fps 2 --count 5 --format jpeg --max-width 1280
+python -m remote.client grpc info
+python -m remote.client grpc screenshot /tmp/shot.jpg --format jpeg --quality 70
+python -m remote.client grpc stream /tmp/frames --fps 2 --count 5
+```
+
+带 token 时加 `--token XXX` (WS 拼进 URL + 握手头, gRPC 放进 metadata)。
+
+## 4. WebSocket 协议
+
+请求 (文本帧, JSON):
+
+```jsonc
+{"id": 1, "op": "mouse.move", "args": {"x": 100, "y": 200}}
+{"id": 2, "op": "mouse.move", "x": 100, "y": 200}          // args 可平铺
+{"id": 3, "batch": [{"op": "ping"}, {"op": "mouse.position"}]}
+```
+
+响应:
+
+```jsonc
+{"id": 1, "ok": true,  "result": {"x": 100, "y": 200}}
+{"id": 1, "ok": false, "error": {"code": "bad_request", "message": "..."}}
+```
+
+错误码: `bad_request` / `unknown_op` / `unauthorized` / `internal`。
+
+### 二进制截屏帧
+
+`screen.grab` (或 `screen.screenshot` + `"binary": true`) 回一帧二进制:
+
+```
+[4 字节大端: JSON 头长度 N][N 字节 JSON 头][图片字节]
+```
+
+头里带 `event/format/width/height/bytes/ts/duration_ms/backend`。
+`screen.watch` 按 fps 持续推同样的帧 (头里 `event="frame"`, 带 `watch_id`/`seq`):
+
+```jsonc
+{"op": "screen.watch", "args": {"fps": 2, "format": "jpeg", "quality": 60, "max_width": 1280}}
+{"op": "screen.unwatch", "args": {"watch_id": "w1"}}
+```
+
+### 兼容原空气鼠标协议
+
+不带 `op`、但带 `t` / `mouse` / `text` / `key` 的消息会被直接交给 `app.handle_message`,
+即 `web/` 页面可以不走 PeerJS, 直接把传感器数据发到本机 WS:
+
+```js
+const ws = new WebSocket("ws://127.0.0.1:8765/");
+ws.onopen = () => ws.send(JSON.stringify({
+  t: "sensor", x: 0, y: 0, z: 9.8, alpha: 0, beta: 0, gamma: 0, gx: 0, gy: 0, gz: 0,
+}));
+```
+
+### 鉴权
+
+设置 token 后, 三种方式任一即可:
+
+1. `ws://host:port/?token=XXX`
+2. 握手头 `Authorization: Bearer XXX` (或 `X-Kuuki-Token: XXX`)
+3. 首条消息 `{"op":"auth","args":{"token":"XXX"}}`
+
+未通过鉴权只允许发 `auth`, 其余请求回 `unauthorized` 并断开 (1008)。
+
+## 5. gRPC 接口
+
+服务 `kuuki.remote.v1.RemoteControl`, 定义在
+[`remote/proto/kuuki_remote.proto`](proto/kuuki_remote.proto)。
+
+| RPC | 说明 |
+|---|---|
+| `GetInfo` / `Ping` | 环境信息 / 连通性 |
+| `Screenshot(ScreenshotRequest) → Image` | 抓一帧, `data` 是图片字节 |
+| `StreamScreenshots(StreamScreenshotsRequest) → stream Image` | **服务端流式推帧** (WS 侧要自己轮询) |
+| `GetMonitors` | 屏幕列表 |
+| `GetMousePosition` / `MoveMouse` / `MoveMouseRelative` | 光标 |
+| `ClickMouse` / `MouseDown` / `MouseUp` / `Scroll` / `Drag` | 鼠标动作 |
+| `TypeText` / `PressKey` / `Hotkey` / `PasteText` | 键盘 |
+| `SendKuukiMessage` | 老协议 JSON 透传 |
+
+鉴权: metadata `authorization: Bearer <token>`。
+
+> **proto3 JSON 的小坑**: `python -m remote.client grpc ...` 打印的是 proto3 JSON,
+> **默认值 (false / 0 / "") 会被省略**。例如 `CheckKeys` 里不可用的键只会出现
+> `reason` 而没有 `supported`, `info` 在没设 token 时不会出现 `token_required`
+> ——按"缺省即 false"读即可。WS 侧没有这个问题 (显式给 `false`)。
+> 客户端已用 `preserving_proto_field_name=True`, 所以字段名与 WS 一样是 snake_case。
+
+## 6. 操作 (op) 一览
+
+WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
+
+| op | 参数 | 说明 |
+|---|---|---|
+| `ping` | — | 连通性 + uptime |
+| `info` | — | 系统/屏幕/后端/剪贴板/能力清单 |
+| `screen.size` *`size`* | — | 屏幕尺寸 |
+| `screen.monitors` *`monitors`* | — | 屏幕列表 (index 0 = 整个虚拟桌面) |
+| `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `monitor` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` | 抓一帧 |
+| `screen.grab` | 同上 | 同上, 强制二进制帧 (WS) |
+| `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 |
+| `mouse.position` *`position`* | — | 当前光标 |
+| `mouse.move` *`move`* | `x` `y` `duration` | 绝对定位 (`duration>0` 平滑) |
+| `mouse.move_rel` *`move_rel`* | `dx` `dy` `duration` | 相对移动 |
+| `mouse.click` *`click`* | `button` `clicks` `interval` | 点击 |
+| `mouse.down` / `mouse.up` | `button` | 按住 / 松开 |
+| `mouse.scroll` *`scroll`* | `dx` `dy` (兼容老协议 `delta`) | 滚轮, `dy>0` 向上 |
+| `mouse.drag` *`drag`* | `x1` `y1` `x2` `y2` `button` `duration` | 拖拽 |
+| `keyboard.type` *`type`/`text`* | `text` `interval` | 输入文本 |
+| `keyboard.key` *`key`* | `key` `action`(tap/press/release) `modifiers` | 单键 |
+| `keyboard.hotkey` *`hotkey`* | `keys` (`"ctrl+shift+s"` 或数组) | 组合键 |
+| `keyboard.paste` *`paste`* | `text` | 写剪贴板 + Ctrl/Cmd+V (**中文/emoji 用这个**) |
+| `keyboard.check` *`check`/`keys`* | `keys` 或 `key` | **预检**键能不能发 (不按键) |
+| `kuuki` *`sensor`* | `message` | 老协议透传 |
+
+## 7. 截屏后端与已知限制
+
+### 后端自动降级
+
+`mss` → `Pillow.ImageGrab` → `ffmpeg -f x11grab`。选中的后端第一次抓图失败会被拉黑,
+自动换下一个; 可用性可以用 `info.capture_backends` 查。
+
+**本机 (WSL2 / WSLg, `DISPLAY=:0`, 1680x1050) 实测**:
+
+| 后端 | 结果 |
+|---|---|
+| `mss` | 未安装 |
+| `Pillow.ImageGrab` | ✗ `OSError: X get_image failed: error 8` (BadMatch) |
+| `python-xlib` 直接 `root.get_image()` | ✗ 同样 BadMatch |
+| `ffmpeg -f x11grab ... -f image2pipe -vcodec png -` | ✓ 可用, 约 240–320 ms/帧 (含进程启动) |
+
+原因: WSLg 的 XWayland 不支持在 root window 上 `GetImage`; ffmpeg 走的是另一条路。
+所以在 WSLg 上默认生效的是 **ffmpeg** 后端。
+
+### ⚠️ WSLg 截到的是"WSLg 的虚拟桌面", 不是 Windows 桌面
+
+实测截图是 1680x1050 的 WSLg X 显示内容 (没有窗口时就是全黑), **不包含 Windows 桌面、
+Windows 应用窗口、Windows 上的光标**。想要截 Windows 桌面需要在 Windows 侧跑服务
+(那时 `Pillow.ImageGrab` 后端会直接可用), 或者改用 Windows 侧的截图方案。
+
+`draw_cursor: true` 会把**X 侧光标位置**画成红色十字+圆圈 (截图本身通常不含光标)。
+
+### ⚠️ X11 键预检: 未映射的键会被拒绝, 不会挂死
+
+`pynput` 遇到键盘映射里没有的键会走 "借键" 路径 (临时 `change_keyboard_mapping` 改布局)。
+在 WSLg 的 XWayland 上这**会把整条 X 连接打死**: 实测 `Key.f13` 抛
+`AttributeError: 'BadRRModeError' object has no attribute 'sequence_number'`,
+之后同一条连接上连 `esc` / `a` / `enter` 全部**永久阻塞** (换新进程则正常)。
+
+因此 `remote/input.py` 在按键前做纯查询式预检 (键解析不出 keysym, 或
+`keysym_to_keycode` 为 0 → 直接拒绝), 并保证:
+
+- 未映射的键 → 干净的 `bad_request`, 不进入 borrowing 路径;
+- 出错后自动重建键盘控制器 (换新 X 连接), 后续按键不受影响;
+- `keyboard.type` 会**先整串预检**: 只要有一个字符打不出来 (中文/emoji 最常见) 就整体拒绝,
+  并提示改用 `keyboard.paste`。
+
+动手前可以先 `keyboard.check` 问一下:
+
+```bash
+python -m remote.client ws op keyboard.check --args '{"keys":["a","enter","f1","f13","中"]}'
+# f13 -> {"supported": false, "reason": "在当前 X 键盘映射里没有对应 keycode"}
+# 中  -> {"supported": false, "reason": "不在当前 X 键盘映射里 ..."}
+```
+
+### 中文/emoji 输入
+
+X11 下 pynput 打不出中文, 用 `keyboard.paste`: 写剪贴板 + 发 `Ctrl+V`。
+剪贴板工具探测顺序 `wl-copy` → `xclip` → `xsel` → `pbcopy` → `clip`
+(本机探测到 `wl-copy`)。`info.clipboard_tool` 可查。
+
+## 8. 安全
+
+- 默认只绑 `127.0.0.1`。
+- 不设 token 时**任何能连到该端口的本机进程都能控制你的鼠标键盘并读屏**。
+- 要暴露到网络必须 `--allow-remote --token <强随机值>`, 且建议再套一层 SSH 隧道 / 反向代理。
+- gRPC 用的是 `insecure_channel` (明文), token 只是防误连, 不是加密; 跨机请走隧道。
+
+## 9. 测试与验证状态
+
+```bash
+python -m pytest test_remote.py -v      # 13 项
+python -m remote --selftest --selftest-input
+```
+
+验证状态: **2026-09-19 在本机 (WSL2/WSLg, conda py3.12, `DISPLAY=:0`) 实测通过**。
+
+- `test_remote.py` 13 项全过 (键名解析 / 区域 / 编码 / 裁剪缩放 / 光标叠加 /
+  服务调度 / 请求信封与 batch / kuuki 透传 / 键预检 / WS 帧编解码 / WS 端到端 /
+  gRPC 端到端含流式与鉴权失败)。
+- 真实抓屏: ffmpeg 后端 1680x1050, PNG 魔数正确。
+- 真实鼠标: 移动到屏幕中心再回原位, 位置读数一致。
+- 真实键盘: 用 `pynput.keyboard.Listener` (XRecord) 抓 XTEST 注入事件,
+  `kuuki-remote` 逐字符全部到达, `enter` 与 `ctrl+shift+k` 到达。
+- 未实测: 多显示器 (本机只有一块虚拟屏)、Windows/macOS 后端、跨机网络调用。
+
+测试套件**不动鼠标键盘**; 会按键/移光标的验证都在 `--selftest-input` 与冒烟脚本里,
+需要显式开启。

@@ -1,0 +1,234 @@
+// kuuki-mouse 远程控制扩展 —— gRPC 接口定义
+//
+// 与 WebSocket 侧共用同一套语义 (见 remote/service.py), 这里只是把它变成
+// 强类型 + 支持服务端流式截屏。
+//
+// 生成 (仓库根目录):
+//   bash remote/proto/gen_proto.sh
+// 或:
+//   python -m grpc_tools.protoc -I remote/proto \
+//       --python_out=remote/proto --grpc_python_out=remote/proto \
+//       remote/proto/kuuki_remote.proto
+//
+// 注意: 仓库 .gitignore 里有 `*pb2.py` / `*pb2_grpc.py`, 但 remote/proto/ 下的
+// 存根是运行必需, 已用取反规则 `!remote/proto/*.py` 允许入库。
+
+syntax = "proto3";
+
+package kuuki.remote.v1;
+
+// ---------------------------------------------------------------- 基础类型
+
+message Empty {}
+
+message Ack {
+  bool ok = 1;
+  string message = 2;
+}
+
+message Point {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+message Rect {
+  int32 left = 1;
+  int32 top = 2;
+  int32 width = 3;
+  int32 height = 4;
+}
+
+message Monitor {
+  int32 index = 1;
+  int32 left = 2;
+  int32 top = 3;
+  int32 width = 4;
+  int32 height = 5;
+  bool primary = 6;
+  string name = 7;
+}
+
+message MonitorList {
+  repeated Monitor monitors = 1;
+}
+
+message BackendStatus {
+  string name = 1;
+  bool available = 2;
+  string reason = 3;
+}
+
+message Info {
+  string version = 1;
+  string os = 2;
+  string platform = 3;
+  string python = 4;
+  string hostname = 5;
+  string user = 6;
+  string cwd = 7;
+  string display = 8;
+  repeated Monitor monitors = 9;
+  repeated BackendStatus capture_backends = 10;
+  string clipboard_tool = 11;
+  bool token_required = 12;
+  double uptime_s = 13;
+  Point cursor = 14;
+  repeated string capabilities = 15;
+  string screen_error = 16;
+}
+
+// ---------------------------------------------------------------- 截屏
+
+message ScreenshotRequest {
+  Rect region = 1;        // 不给则整屏 / 指定 monitor
+  int32 monitor = 2;      // 0 = 整个虚拟桌面
+  string format = 3;      // png / jpeg / webp (默认 png)
+  int32 quality = 4;      // jpeg/webp 质量, 默认 80
+  int32 max_width = 5;    // 等比缩到不超过该宽 (0 = 不限)
+  int32 max_height = 6;   // 等比缩到不超过该高 (0 = 不限)
+  double scale = 7;       // 显式缩放系数 (0 = 不限)
+  bool draw_cursor = 8;   // 把光标画成十字 (截图本身通常不含光标)
+}
+
+message Image {
+  bytes data = 1;
+  string format = 2;
+  int32 width = 3;
+  int32 height = 4;
+  int32 source_width = 5;
+  int32 source_height = 6;
+  string backend = 7;
+  int32 monitor = 8;
+  Rect region = 9;
+  double scale = 10;
+  double captured_at = 11;
+  double duration_ms = 12;
+  Point cursor = 13;
+  bool has_cursor = 14;
+  bool cursor_in_frame = 15;
+}
+
+message StreamScreenshotsRequest {
+  ScreenshotRequest shot = 1;
+  double fps = 2;          // <=0 时用 interval_ms
+  int32 interval_ms = 3;   // 默认 500ms
+  int32 count = 4;         // 0 = 一直推到客户端取消
+}
+
+// ---------------------------------------------------------------- 鼠标
+
+message MoveMouseRequest {
+  int32 x = 1;
+  int32 y = 2;
+  double duration = 3;     // >0 时平滑移动 (秒)
+}
+
+message MoveMouseRelativeRequest {
+  int32 dx = 1;
+  int32 dy = 2;
+  double duration = 3;
+}
+
+message ClickMouseRequest {
+  string button = 1;       // left / middle / right
+  int32 clicks = 2;        // 默认 1
+  double interval = 3;     // 连击间隔 (秒)
+}
+
+message MouseButtonRequest {
+  string button = 1;
+}
+
+message ScrollRequest {
+  int32 dx = 1;            // 水平, >0 向右
+  int32 dy = 2;            // 垂直, >0 向上
+}
+
+message DragRequest {
+  int32 x1 = 1;
+  int32 y1 = 2;
+  int32 x2 = 3;
+  int32 y2 = 4;
+  string button = 5;
+  double duration = 6;
+}
+
+// ---------------------------------------------------------------- 键盘
+
+message TypeTextRequest {
+  string text = 1;
+  double interval = 2;     // >0 时逐字符间隔
+}
+
+message KeyRequest {
+  string key = 1;          // "enter" / "f5" / "a"
+  string action = 2;       // tap / press / release
+  repeated string modifiers = 3;
+}
+
+message HotkeyRequest {
+  repeated string keys = 1;   // ["ctrl", "shift", "s"]
+}
+
+message PasteTextRequest {
+  string text = 1;         // 写剪贴板 + Ctrl/Cmd+V (中文输入的可靠方式)
+}
+
+message KeyCheckRequest {
+  repeated string keys = 1;   // 待检查的键名
+}
+
+message KeyCheckResult {
+  string key = 1;
+  bool supported = 2;
+  string reason = 3;       // supported=false 时说明原因
+}
+
+message KeyCheckReply {
+  repeated KeyCheckResult keys = 1;
+}
+
+// ---------------------------------------------------------------- kuuki 老协议
+
+message KuukiMessageRequest {
+  string json = 1;         // 一条老协议 JSON, 例如 {"t":"mouse","button":"left"}
+}
+
+message KuukiMessageReply {
+  bool handled = 1;
+  string json = 2;
+}
+
+// ---------------------------------------------------------------- 服务
+
+service RemoteControl {
+  // 元信息
+  rpc GetInfo(Empty) returns (Info);
+  rpc Ping(Empty) returns (Ack);
+
+  // 截屏
+  rpc Screenshot(ScreenshotRequest) returns (Image);
+  rpc StreamScreenshots(StreamScreenshotsRequest) returns (stream Image);
+  rpc GetMonitors(Empty) returns (MonitorList);
+
+  // 鼠标
+  rpc GetMousePosition(Empty) returns (Point);
+  rpc MoveMouse(MoveMouseRequest) returns (Ack);
+  rpc MoveMouseRelative(MoveMouseRelativeRequest) returns (Ack);
+  rpc ClickMouse(ClickMouseRequest) returns (Ack);
+  rpc MouseDown(MouseButtonRequest) returns (Ack);
+  rpc MouseUp(MouseButtonRequest) returns (Ack);
+  rpc Scroll(ScrollRequest) returns (Ack);
+  rpc Drag(DragRequest) returns (Ack);
+
+  // 键盘
+  rpc TypeText(TypeTextRequest) returns (Ack);
+  rpc PressKey(KeyRequest) returns (Ack);
+  rpc Hotkey(HotkeyRequest) returns (Ack);
+  rpc PasteText(PasteTextRequest) returns (Ack);
+  // 预检: 这些键在当前键盘布局里能不能发 (不实际按键)
+  rpc CheckKeys(KeyCheckRequest) returns (KeyCheckReply);
+
+  // 空气鼠标老协议透传 (姿态数据 / 鼠标键 / 文本)
+  rpc SendKuukiMessage(KuukiMessageRequest) returns (KuukiMessageReply);
+}

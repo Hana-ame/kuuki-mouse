@@ -131,7 +131,10 @@ python -m remote.ctl move self 400 300 --duration .3
 
 `op` / `check` / `shot` / `watch` / `tail` 这几个命令的目标要用 `-t/--to` / `-g` / `-a`
 (它们的位置参数是 op 名 / 键名 / 路径, 会被别名列表吞掉)。完整命令表与注释见
-[docs/puppet-multi-machine.md](docs/puppet-multi-machine.md) 第 4 节。
+[docs/puppet-multi-machine.md](../docs/puppet-multi-machine.md) 第 4 节。
+
+**实操手册**: [docs/ctl-selfhost-runbook.md](../docs/ctl-selfhost-runbook.md) ——
+记录 / 注意事项 (含踩过的坑) / 从零复现本机自控的 8 步指南。想上手照抄命令就翻它。
 
 > 2026-09-20 本机自控实测: 起一个 `python -m remote --no-peerjs`, 注册成 WS 与 gRPC
 > 两个别名, ping / info / 光标 / 键预检 / 截屏 / 连续抓帧全部通过。

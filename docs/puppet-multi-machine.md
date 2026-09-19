@@ -89,7 +89,8 @@ python -m remote.ctl machines list            # 别名 / 传输 / 地址 / 组 /
 python -m remote.ctl machines show pc1        # (token 默认打码, --show-token 才显示)
 python -m remote.ctl machines rm pc3
 
-# 单发 / 广播 / 组播: 目标写在命令后, 或 -t <别名> / -g <组> / -a
+# 单发 / 广播 / 组播: 多数命令目标写在命令后, 也可 -t <别名> / -g <组> / -a
+#                    (例外见下方注意: op / check / shot / watch / tail 的目标只能走 -t/-g/-a)
 python -m remote.ctl ping pc1 pc2 pc3         # 单发多台
 python -m remote.ctl ping all                 # 广播
 python -m remote.ctl info -g office           # 组播
@@ -126,6 +127,9 @@ python -m remote.ctl tail  frames -t pc1                  # 一直抓到 Ctrl-C
 - 截图回显：`shot` 存文件；`watch` / `tail` 按 `<目录>/<别名>/0001.png` 连续落盘（多机不会互相覆盖）。
 - registry 里的 token 是**明文**：新建时会收权限（POSIX 0600，Windows 用 icacls 断继承），不想落盘就让它读环境变量 `KUUKI_REMOTE_TOKEN`。
 - 退出码：全部成功 0；有机器失败 1；用法错误（未知别名 / 未知组 / `--args` 不是 JSON）2。
+
+> **想照着跑一遍？** 见 [docs/ctl-selfhost-runbook.md](ctl-selfhost-runbook.md)：
+> 实测记录、**14 条注意事项**（目标参数冲突 / registry 回填 / 端口占用 / 跨传输返回形状差异 / token 明文 / 只在 Windows 受控 / 本机 venv 与 git push 的坑）、以及**从零复现本机自控的 8 步**（起受控端 → 注册 self 与 self-grpc → 只读四连 → 截屏抓帧 → 零位移输入 → 故障演练 → 测试 → 收尾），每步附实测输出。
 
 ## 5. 目标端部署包
 

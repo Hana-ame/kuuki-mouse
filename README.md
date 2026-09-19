@@ -190,6 +190,8 @@ test_remote.py   remote/ 扩展的测试 (57 项, 不动鼠标键盘; 含平台�
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机, P1-P3/P6 已落地)
+docs/ctl-selfhost-runbook.md  控制端实战手册: 实测记录 / 注意事项 / 一步步复现本机自控
+check_ctl_docs.py             校验文档代码块里的 ctl 命令是否还被 parser 认得 (防文档过期)
 
 # ---- 调试 / 演示小工具 ----
 annotate.py      截图上叠坐标网格 + 标记目标点/色块, 核对"算出的坐标偏没偏"

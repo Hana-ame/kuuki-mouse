@@ -35,9 +35,12 @@ concurrency:
 jobs:
   build:
     runs-on: windows-latest
-    # 只有打 tag 时才需要写权限去建 Release, 其余情况 read 就够
+    # 建 Release 需要 contents: write。
+    # 注意: permissions **不支持** ${{ }} 表达式 —— 写了会让整个 workflow 文件解析失败
+    # (表现为 run 0 秒 failure, "likely failed because of a workflow file issue")。
+    # 只能给字面值。fork PR 场景下 GitHub 会自动把 token 降级成只读, 所以这里不会真的敞开。
     permissions:
-      contents: ${{ startsWith(github.ref, 'refs/tags/v') && 'write' || 'read' }}
+      contents: write
 
     steps:
       - name: 检出代码

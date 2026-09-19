@@ -420,3 +420,276 @@ def test_peerjs_chunker_roundtrip():
     assert PeerJsChunker().feed({"id": 9, "ok": True, "result": {}}) == {
         "id": 9, "ok": True, "result": {}
     }
+
+
+# ================================================================ 动作增强 (P1)
+#
+# 下面全部用假鼠标/假键盘。真正的按下与移动只在 --selftest-input 冒烟里做。
+
+
+class FakeMouse:
+    """记录 scroll / 光标位置 / 按键次数, 不碰真实光标。"""
+
+    def __init__(self):
+        self.scrolls = []
+        self.positions = []
+        self.presses = 0
+        self.releases = 0
+        self._pos = (400, 300)
+
+    @property
+    def position(self):
+        return self._pos
+
+    @position.setter
+    def position(self, value):
+        self._pos = (int(value[0]), int(value[1]))
+        self.positions.append(self._pos)
+
+    def scroll(self, dx, dy):
+        self.scrolls.append((int(dx), int(dy)))
+
+    def press(self, button):
+        self.presses += 1
+
+    def release(self, button):
+        self.releases += 1
+
+
+class FakeKeyboard:
+    def __init__(self):
+        self.events = []
+
+    def press(self, key):
+        self.events.append(("press", str(key)))
+
+    def release(self, key):
+        self.events.append(("release", str(key)))
+
+    def tap(self, key):
+        self.events.append(("tap", str(key)))
+
+    def type(self, text):
+        self.events.append(("type", text))
+
+
+def fake_controller():
+    mouse, keyboard = FakeMouse(), FakeKeyboard()
+    return InputController(mouse=mouse, keyboard=keyboard), mouse, keyboard
+
+
+def side_effects(mouse, keyboard):
+    return (list(mouse.scrolls), list(mouse.positions), list(keyboard.events))
+
+
+def flatten(result):
+    """把两条传输的响应拉平到同一形态再比较。
+
+    WebSocket 侧 ``handle_request`` 会给 result 加一个 ``ok`` (传输信封约定);
+    gRPC 侧把结果放进 ``Ack.message`` 的 JSON 字符串里。
+    """
+    if (
+        isinstance(result, dict)
+        and set(result) <= {"ok", "message"}
+        and isinstance(result.get("message"), str)
+    ):
+        try:
+            result = json.loads(result["message"])
+        except json.JSONDecodeError:
+            return result
+    if isinstance(result, dict) and "ok" in result:
+        result = {k: v for k, v in result.items() if k != "ok"}
+    return result
+
+
+@pytest.mark.parametrize("dy,steps", [(3, 5), (1, 3), (7, 3), (-4, 6), (10, 1), (0, 4)])
+def test_scroll_steps_preserve_total(dy, steps):
+    """多步滚动: 总增量必须精确等于 dy, 且不发空转的 0 格。"""
+    controller, mouse, _ = fake_controller()
+    controller.scroll(0, dy, steps=steps, interval=0)
+    assert sum(step for _, step in mouse.scrolls) == dy
+    assert all(step != 0 for _, step in mouse.scrolls)
+
+
+def test_scroll_single_step_keeps_old_behaviour():
+    controller, mouse, _ = fake_controller()
+    controller.scroll(2, -3)
+    assert mouse.scrolls == [(2, -3)], "默认 steps=1 应保持一次调用"
+
+
+def test_scroll_position_then_scroll():
+    """先定位再滚: 只给 x 时 y 保持当前坐标 (不是 0)。"""
+    controller, mouse, _ = fake_controller()
+    controller.scroll(0, 2, x=120, interval=0)
+    assert mouse.positions[0] == (120, 300)
+    assert mouse.scrolls == [(0, 2)]
+
+
+def test_drag_path_points():
+    controller, mouse, _ = fake_controller()
+    result = controller.drag(points=[[10, 20], [30, 40], [50, 60]], duration=0)
+    assert result["segments"] == 2
+    assert result["from"] == [10, 20] and result["to"] == [50, 60]
+    assert (30, 40) in mouse.positions, "路径点必须被真正经过"
+    assert (mouse.presses, mouse.releases) == (1, 1), "整条路径只按一次、只松一次"
+
+
+def test_drag_two_points_backward_compatible():
+    controller, mouse, _ = fake_controller()
+    result = controller.drag(1, 2, 3, 4, duration=0)
+    assert result["from"] == [1, 2] and result["to"] == [3, 4]
+    assert result["segments"] == 1
+
+
+@pytest.mark.parametrize("kwargs", [{"points": [[1, 2]]}, {"points": [[1, 2], [3]]}, {}])
+def test_drag_rejects_bad_points(kwargs):
+    controller, _, _ = fake_controller()
+    with pytest.raises(ValueError):
+        controller.drag(**kwargs)
+
+
+def test_combo_hold_ms_and_hold_key():
+    controller, _, keyboard = fake_controller()
+
+    result = controller.hotkey("ctrl+shift+s", hold_ms=10)
+    assert result["hold_ms"] == 10
+    order = [name for name, _ in keyboard.events]
+    assert order == ["press", "press", "press", "release", "release", "release"]
+    # 逆序松开: 最后按下的是 s, 最先松开
+    keys = [key for _, key in keyboard.events]
+    assert keys[2] == keys[3], "s 应紧邻地按下再松开"
+    assert keys[5] == str(resolve_key("ctrl"))
+
+    keyboard.events.clear()
+    assert controller.hold_key("f2", 10) == {"key": "f2", "ms": 10}
+    assert [name for name, _ in keyboard.events] == ["press", "release"]
+
+    with pytest.raises(ValueError):
+        controller.hold_key("f2", 0)
+
+
+def test_parse_points_accepts_two_forms():
+    from remote.service import parse_points
+
+    assert parse_points([[1, 2], [3, 4]]) == [[1, 2], [3, 4]]
+    assert parse_points([{"x": 1, "y": 2}, {"x": 3, "y": 4}]) == [[1, 2], [3, 4]]
+    assert parse_points("1,2;3,4") == [[1, 2], [3, 4]]
+    for bad in ("1,2;bad", [[1, 2], [3]], "nonsense"):
+        with pytest.raises(RemoteError):
+            parse_points(bad)
+
+
+def test_service_new_ops_and_aliases():
+    controller, mouse, keyboard = fake_controller()
+    service = RemoteService(screen=fake_screen(), controller=controller)
+
+    assert service.resolve_op("scroll_h") == "mouse.scroll_h"
+    assert service.resolve_op("combo") == "keyboard.combo"
+    assert service.resolve_op("hold") == "keyboard.hold"
+    assert service.resolve_op("dragp") == "mouse.drag"
+
+    capabilities = service.handle("info", {})["capabilities"]
+    for op in ("mouse.scroll_h", "keyboard.combo", "keyboard.hold"):
+        assert op in capabilities
+
+    out = service.handle("scroll", {"dy": 6, "steps": 3, "interval": 0})
+    assert out["steps"] == 3
+    assert sum(step for _, step in mouse.scrolls) == 6
+
+    out = service.handle("dragp", {"points": "10,20;30,40;50,60", "duration": 0})
+    assert out["segments"] == 2
+
+    out = service.handle("scroll_h", {"dx": 4, "steps": 2, "interval": 0})
+    assert out["axis"] == "h" and out["dy"] == 0
+
+    out = service.handle("combo", {"keys": "ctrl+c", "hold_ms": 5})
+    assert out["keys"] == ["ctrl", "c"] and out["hold_ms"] == 5
+
+    out = service.handle("hold", {"key": "f2", "ms": 5})
+    assert out["ms"] == 5 and out["key"] == "f2"
+
+    # 老协议的 delta 滚动不能被新增的 steps 参数弄坏
+    mouse.scrolls.clear()
+    service.handle("scroll", {"delta": 2})
+    assert mouse.scrolls == [(0, 2)]
+
+
+def test_service_rejects_bad_new_op_args():
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    for op, args in (
+        ("mouse.drag", {"points": [[1, 2]]}),
+        ("mouse.drag", {"points": "1,2;bad"}),
+        ("keyboard.hold", {"key": "f2", "ms": 0}),
+        ("keyboard.hold", {"ms": 50}),
+        ("keyboard.combo", {}),
+    ):
+        with pytest.raises(RemoteError) as exc:
+            service.handle(op, args)
+        assert exc.value.code == "bad_request", f"{op} {args}"
+
+
+NEW_OP_CASES = [
+    ("mouse.scroll", {"dy": 7, "steps": 3, "interval": 0}),
+    ("mouse.scroll", {"dy": 2, "x": 111}),
+    ("mouse.scroll", {"dy": 2, "y": 222}),
+    ("mouse.scroll_h", {"dx": 5, "steps": 2, "interval": 0}),
+    ("mouse.drag", {"points": [[10, 20], [30, 40], [50, 60]], "duration": 0}),
+    ("mouse.drag", {"points": "10,20;30,40", "duration": 0}),
+    ("keyboard.hotkey", {"keys": "ctrl+shift+s"}),
+    ("keyboard.combo", {"keys": "ctrl+shift+s", "hold_ms": 5}),
+    ("keyboard.hold", {"key": "f2", "ms": 5}),
+]
+
+
+def test_new_ops_agree_across_transports():
+    """同一动作经 WS 与 gRPC 下发, 返回值与副作用必须一致。
+
+    这条是 P1 的底线: 三个传输共用一个 ``RemoteService``, 但两边的**参数翻译层**
+    各写各的, 很容易出现"WS 认得 interval=0、gRPC 当成没给"这种偏差
+    (proto3 的普通标量分不清显式 0 与缺省, 所以相关字段都用了 optional)。
+    """
+    from remote.grpc_server import GrpcServer
+    from remote.client import GrpcClient, WsClient
+
+    async def over_ws():
+        controller, mouse, keyboard = fake_controller()
+        service = RemoteService(screen=fake_screen(), controller=controller)
+        server = WsServer(service, host="127.0.0.1", port=0)
+        await server.start()
+        port = server._server.sockets[0].getsockname()[1]
+        collected = []
+        try:
+            async with WsClient(f"ws://127.0.0.1:{port}/", timeout=20) as client:
+                for op, args in NEW_OP_CASES:
+                    mouse.scrolls.clear()
+                    mouse.positions.clear()
+                    keyboard.events.clear()
+                    result = await client.call(op, args)
+                    collected.append((result, side_effects(mouse, keyboard)))
+        finally:
+            await server.close()
+        return collected
+
+    ws_results = run(over_ws())
+
+    controller, mouse, keyboard = fake_controller()
+    service = RemoteService(screen=fake_screen(), controller=controller)
+    grpc_server = GrpcServer(service, host="127.0.0.1", port=0)
+    port = grpc_server.start()
+    grpc_results = []
+    try:
+        with GrpcClient(f"127.0.0.1:{port}", timeout=20) as client:
+            for op, args in NEW_OP_CASES:
+                mouse.scrolls.clear()
+                mouse.positions.clear()
+                keyboard.events.clear()
+                result = client.call(op, args)
+                grpc_results.append((result, side_effects(mouse, keyboard)))
+    finally:
+        grpc_server.stop(0.5)
+
+    for (op, args), (ws_result, ws_side), (grpc_result, grpc_side) in zip(
+        NEW_OP_CASES, ws_results, grpc_results
+    ):
+        assert flatten(ws_result) == flatten(grpc_result), f"{op} {args} 返回值不一致"
+        assert ws_side == grpc_side, f"{op} {args} 副作用不一致"

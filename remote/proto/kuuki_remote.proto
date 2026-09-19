@@ -116,6 +116,14 @@ message MouseButtonRequest {
 message ScrollRequest {
   int32 dx = 1;            // 水平, >0 向右
   int32 dy = 2;            // 垂直, >0 向上
+  int32 steps = 3;         // >1 时拆成多步平滑滚动 (总增量仍等于 dx/dy)
+  // 每步间隔秒数。用 optional 才能区分「没给」与「显式给 0」: 前者用服务的默认
+  // 0.05, 后者表示不分步间隔一路发完。proto3 的普通标量把两者都变成 0。
+  optional double interval = 4;
+  // 可选: 先把光标移到这里再滚。同样用 optional, 为了能只给其中一个
+  // (另一个保持当前坐标) —— 与 WebSocket 侧 x/y 可单独缺省保持一致。
+  optional int32 at_x = 5;
+  optional int32 at_y = 6;
 }
 
 message DragRequest {
@@ -124,7 +132,9 @@ message DragRequest {
   int32 x2 = 3;
   int32 y2 = 4;
   string button = 5;
-  double duration = 6;
+  // **每段**时长 (秒)。optional 同上: 缺省 0.3, 显式 0 表示直接跳到终点。
+  optional double duration = 6;
+  repeated Point points = 7;  // 路径点 (>=2); 给了就忽略 x1..y2
 }
 
 // ---------------------------------------------------------------- 键盘
@@ -142,6 +152,16 @@ message KeyRequest {
 
 message HotkeyRequest {
   repeated string keys = 1;   // ["ctrl", "shift", "s"]
+}
+
+message ComboRequest {
+  repeated string keys = 1;   // ["ctrl", "shift", "s"]
+  double hold_ms = 2;         // >0 时全部按下后保持这么久再逆序松开
+}
+
+message KeyHoldRequest {
+  string key = 1;             // 单个键, 例如 "f2"
+  double ms = 2;              // 按住毫秒数, 必须 > 0
 }
 
 message PasteTextRequest {
@@ -192,12 +212,15 @@ service RemoteControl {
   rpc MouseDown(MouseButtonRequest) returns (Ack);
   rpc MouseUp(MouseButtonRequest) returns (Ack);
   rpc Scroll(ScrollRequest) returns (Ack);
+  rpc ScrollHorizontal(ScrollRequest) returns (Ack);
   rpc Drag(DragRequest) returns (Ack);
 
   // 键盘
   rpc TypeText(TypeTextRequest) returns (Ack);
   rpc PressKey(KeyRequest) returns (Ack);
   rpc Hotkey(HotkeyRequest) returns (Ack);
+  rpc Combo(ComboRequest) returns (Ack);
+  rpc HoldKey(KeyHoldRequest) returns (Ack);
   rpc PasteText(PasteTextRequest) returns (Ack);
   // 预检: 这些键在当前键盘布局里能不能发 (不实际按键)
   rpc CheckKeys(KeyCheckRequest) returns (KeyCheckReply);

@@ -67,6 +67,48 @@ def _as_str(value: Any, name: str, default: str = "") -> str:
     return str(value)
 
 
+def parse_points(value: Any) -> list:
+    """把路径点归一成 ``[[x, y], ...]``。
+
+    包内共享: 服务端要解析请求里的 points, gRPC 客户端也要把同样的写法填进
+    protobuf, 两边用同一份实现才不会出现"WS 认得、gRPC 不认得"的偏差。
+
+    接受两种写法 (手写调试时后者省事):
+    - ``[[100, 200], [300, 400]]`` / ``[{"x":100,"y":200}, ...]``
+    - ``"100,200;300,400"``
+    """
+    if isinstance(value, str):
+        text = value.replace(" ", "")
+        if not text:
+            return []
+        raw: list = []
+        for chunk in text.split(";"):
+            if not chunk:
+                continue
+            parts = chunk.split(",")
+            if len(parts) != 2:
+                raise RemoteError(
+                    "bad_request", f"路径点格式应为 x,y;x,y, 收到 {chunk!r}"
+                )
+            raw.append(parts)
+        value = raw
+    if not isinstance(value, (list, tuple)):
+        raise RemoteError("bad_request", f"points 必须是列表, 收到 {type(value).__name__}")
+    out = []
+    for item in value:
+        if isinstance(item, dict):
+            px, py = item.get("x"), item.get("y")
+        elif isinstance(item, (list, tuple)) and len(item) == 2:
+            px, py = item
+        else:
+            raise RemoteError("bad_request", f"每个路径点应为 [x, y], 收到 {item!r}")
+        try:
+            out.append([int(px), int(py)])
+        except (TypeError, ValueError):
+            raise RemoteError("bad_request", f"路径点坐标必须是整数, 收到 {item!r}")
+    return out
+
+
 class RemoteService:
     """把输入控制与截屏包装成一组命名操作。"""
 
@@ -91,10 +133,13 @@ class RemoteService:
             "mouse.down": self._op_mouse_down,
             "mouse.up": self._op_mouse_up,
             "mouse.scroll": self._op_mouse_scroll,
+            "mouse.scroll_h": self._op_mouse_scroll_h,
             "mouse.drag": self._op_mouse_drag,
             "keyboard.type": self._op_keyboard_type,
             "keyboard.key": self._op_keyboard_key,
             "keyboard.hotkey": self._op_keyboard_hotkey,
+            "keyboard.combo": self._op_keyboard_combo,
+            "keyboard.hold": self._op_keyboard_hold,
             "keyboard.paste": self._op_keyboard_paste,
             "keyboard.check": self._op_keyboard_check,
             "kuuki": self._op_kuuki,
@@ -111,11 +156,15 @@ class RemoteService:
             "mousedown": "mouse.down",
             "mouseup": "mouse.up",
             "scroll": "mouse.scroll",
+            "scroll_h": "mouse.scroll_h",
             "drag": "mouse.drag",
+            "dragp": "mouse.drag",
             "type": "keyboard.type",
             "text": "keyboard.type",
             "key": "keyboard.key",
             "hotkey": "keyboard.hotkey",
+            "combo": "keyboard.combo",
+            "hold": "keyboard.hold",
             "paste": "keyboard.paste",
             "check": "keyboard.check",
             "keys": "keyboard.check",
@@ -288,16 +337,48 @@ class RemoteService:
         else:
             dx = _as_int(args.get("dx"), "dx", 0)
             dy = _as_int(args.get("dy", args.get("delta")), "dy", 0)
-        self.controller.scroll(dx, dy)
-        return {"dx": dx, "dy": dy}
+        steps = _as_int(args.get("steps"), "steps", 1)
+        interval = _as_float(args.get("interval"), "interval", 0.05)
+        # x / y 可选: 先定位再滚。缺省表示保持当前坐标 (不是 0)
+        x = args.get("x")
+        y = args.get("y")
+        x = _as_int(x, "x") if x is not None else None
+        y = _as_int(y, "y") if y is not None else None
+        result = self.controller.scroll(dx, dy, steps, interval, x, y)
+        if x is not None or y is not None:
+            result["positioned_at"] = {"x": x, "y": y}
+        return result
+
+    def _op_mouse_scroll_h(self, args: dict) -> dict:
+        """横向滚动 (= ``mouse.scroll`` 的 dx)。
+
+        单独给个 op 是为了让控制端能写 ``scroll_h --dx 3`` 而不必记"横向要传 dx、
+        dy 留 0" —— 参数名即语义。``delta`` 也认, 按横向处理。
+        """
+        merged = dict(args)
+        if "dx" not in merged:
+            merged["dx"] = merged.pop("delta", 0)
+        merged.setdefault("dy", 0)
+        result = self._op_mouse_scroll(merged)
+        result["axis"] = "h"
+        return result
 
     def _op_mouse_drag(self, args: dict) -> dict:
+        button = _as_str(args.get("button"), "button", "left")
+        duration = _as_float(args.get("duration"), "duration", 0.3)
+        points = args.get("points")
+        if points is None and args.get("path") is not None:
+            points = args.get("path")
+        if points is not None:
+            # path 字符串写法 "x1,y1;x2,y2;x3,y3" 便于手写调试
+            points = parse_points(points)
+            if len(points) < 2:
+                raise RemoteError("bad_request", "points 至少需要两个点 (起点与终点)")
+            return self.controller.drag(button=button, duration=duration, points=points)
         x1 = _as_int(args.get("x1", args.get("from_x")), "x1")
         y1 = _as_int(args.get("y1", args.get("from_y")), "y1")
         x2 = _as_int(args.get("x2", args.get("to_x")), "x2")
         y2 = _as_int(args.get("y2", args.get("to_y")), "y2")
-        button = _as_str(args.get("button"), "button", "left")
-        duration = _as_float(args.get("duration"), "duration", 0.3)
         return self.controller.drag(x1, y1, x2, y2, button, duration)
 
     # ---------------- 键盘 ----------------
@@ -324,7 +405,30 @@ class RemoteService:
         keys = args.get("keys") or args.get("combo") or args.get("key")
         if not keys:
             raise RemoteError("bad_request", "缺少参数 keys (例如 \"ctrl+shift+s\")")
-        return self.controller.hotkey(keys)
+        hold_ms = _as_float(args.get("hold_ms", args.get("hold")), "hold_ms", 0.0)
+        return self.controller.hotkey(keys, hold_ms)
+
+    def _op_keyboard_combo(self, args: dict) -> dict:
+        """组合键 + 按住时长。与 ``keyboard.hotkey`` 是同一个实现。
+
+        分开只是因为语义: ``hotkey`` 是"敲一下这个组合", ``combo`` 是"按住这个组合
+        一段时间" —— 后者在菜单快捷键、游戏按键这类需要持续按下的场景才生效。
+        """
+        keys = args.get("keys") or args.get("combo") or args.get("key")
+        if not keys:
+            raise RemoteError("bad_request", "缺少参数 keys (例如 \"ctrl+shift+s\")")
+        hold_ms = _as_float(args.get("hold_ms", args.get("hold")), "hold_ms", 0.0)
+        result = self.controller.hotkey(keys, hold_ms)
+        result["op"] = "keyboard.combo"
+        return result
+
+    def _op_keyboard_hold(self, args: dict) -> dict:
+        """按住单个键 ``ms`` 毫秒再松开 (F2 重命名这类长按场景)。"""
+        key = _as_str(args.get("key"), "key", "")
+        if not key:
+            raise RemoteError("bad_request", "缺少参数 key")
+        ms = _as_float(args.get("ms", args.get("hold_ms", args.get("duration"))), "ms", 0.0)
+        return self.controller.hold_key(key, ms)
 
     def _op_keyboard_paste(self, args: dict) -> dict:
         text = _as_str(args.get("text", args.get("message")), "text", "")

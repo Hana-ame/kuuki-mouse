@@ -250,26 +250,53 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             result = self.service.handle("mouse.up", {"button": request.button or "left"})
         return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
 
+    @staticmethod
+    def _scroll_args(request) -> dict:
+        """ScrollRequest -> service 的 args。
+
+        ``interval`` / ``at_x`` / ``at_y`` 是 ``optional``: 只有客户端真的设了才传,
+        这样"没给"落到服务的默认值、"显式给 0"保持 0 —— 与 WebSocket 侧
+        (args 里有没有这个键) 完全一致。用 ``request.interval`` 的真假来判断会把
+        显式 0 当成没给。
+        """
+        args: dict = {"dx": request.dx, "dy": request.dy}
+        if request.steps > 1:
+            args["steps"] = int(request.steps)
+        if request.HasField("interval"):
+            args["interval"] = float(request.interval)
+        if request.HasField("at_x"):
+            args["x"] = int(request.at_x)
+        if request.HasField("at_y"):
+            args["y"] = int(request.at_y)
+        return args
+
     def Scroll(self, request, context):
         self._check_auth(context)
         with _translate(context):
-            result = self.service.handle("mouse.scroll", {"dx": request.dx, "dy": request.dy})
+            result = self.service.handle("mouse.scroll", self._scroll_args(request))
+        return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
+
+    def ScrollHorizontal(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle("mouse.scroll_h", self._scroll_args(request))
         return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
 
     def Drag(self, request, context):
         self._check_auth(context)
-        with _translate(context):
-            result = self.service.handle(
-                "mouse.drag",
-                {
-                    "x1": request.x1,
-                    "y1": request.y1,
-                    "x2": request.x2,
-                    "y2": request.y2,
-                    "button": request.button or "left",
-                    "duration": request.duration or 0.3,
-                },
+        args = {"button": request.button or "left"}
+        # duration 是 optional: 没给用 0.3, 显式给 0 就是"直接跳到终点"。
+        # 写成 ``request.duration or 0.3`` 会把显式 0 悄悄换成 0.3, 于是 gRPC 走
+        # 插值轨迹、WS 走瞬移 —— 同样的参数两边行为不同。
+        args["duration"] = float(request.duration) if request.HasField("duration") else 0.3
+        if request.points:
+            args["points"] = [[point.x, point.y] for point in request.points]
+        else:
+            args.update(
+                {"x1": request.x1, "y1": request.y1, "x2": request.x2, "y2": request.y2}
             )
+        with _translate(context):
+            result = self.service.handle("mouse.drag", args)
         return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
 
     # ---------------- 键盘 ----------------
@@ -298,6 +325,23 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
         self._check_auth(context)
         with _translate(context):
             result = self.service.handle("keyboard.hotkey", {"keys": list(request.keys)})
+        return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
+
+    def Combo(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle(
+                "keyboard.combo",
+                {"keys": list(request.keys), "hold_ms": float(request.hold_ms or 0.0)},
+            )
+        return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
+
+    def HoldKey(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle(
+                "keyboard.hold", {"key": request.key, "ms": float(request.ms or 0.0)}
+            )
         return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
 
     def PasteText(self, request, context):

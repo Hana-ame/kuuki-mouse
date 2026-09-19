@@ -4,8 +4,9 @@
 --------------------------
 ``controller.py`` 已经把"鼠标/键盘各自一个 pynput 控制器"这个坑处理掉了
 (双继承时 ``KeyboardController.tap`` 会解析到鼠标版 ``press``)。这里直接继承它,
-只补远程控制需要的东西: 绝对/相对移动、按住/松开、拖拽、带时长的平滑移动、
-更全的特殊键映射、组合键、剪贴板粘贴。
+只补远程控制需要的东西: 绝对/相对移动、按住/松开、拖拽 (两点或**路径点**)、
+带时长的平滑移动、**多步平滑滚动** (可先定位再滚)、更全的特殊键映射、组合键
+(可**按住时长**)、**长按单键**、剪贴板粘贴。
 
 **pynput 的坑**: ``Controller.move(dx, dy)`` 是**相对**位移, 不是绝对坐标;
 绝对定位必须用 ``Controller.position = (x, y)``。原 ``controller.move_mouse()``
@@ -333,30 +334,127 @@ class InputController(PynputMouseController):
             self.mouse.release(btn)
         return total
 
-    def scroll(self, dx: int = 0, dy: int = 0) -> None:
-        """滚轮。``dy>0`` 向上, ``dx>0`` 向右。"""
-        self.mouse.scroll(int(dx), int(dy))
+    def scroll(
+        self,
+        dx: int = 0,
+        dy: int = 0,
+        steps: int = 1,
+        interval: float = 0.05,
+        x: Optional[int] = None,
+        y: Optional[int] = None,
+    ) -> dict:
+        """滚轮。``dy>0`` 向上, ``dx>0`` 向右。
+
+        ``steps>1`` 时把 dx/dy 拆成多步、每步之间 sleep ``interval`` 秒: 一次发出
+        几十格会被前台应用当成瞬移, 分步更接近真人滚动。**总量守恒**靠"累计目标值
+        取整后取差值"保证 —— 若改成每步 ``dx // steps``, 整除余数会被丢掉
+        (``3 格 / 5 步`` 每步 0 格, 最后一格都不滚)。
+
+        ``x`` / ``y`` 给了就先把光标移过去再滚 (悬停在目标区域上滚, 比如把指针
+        放到代码区再滚)。只给其中一个时另一个保持当前坐标。
+        """
+        dx, dy = int(dx), int(dy)
+        steps = max(1, int(steps))
+        interval = max(0.0, float(interval))
+        if x is not None or y is not None:
+            current_x, current_y = self.position()
+            self.move_absolute(
+                current_x if x is None else int(x),
+                current_y if y is None else int(y),
+            )
+        if steps == 1:
+            self.mouse.scroll(dx, dy)
+        else:
+            sent_x = sent_y = 0
+            for index in range(1, steps + 1):
+                want_x = dx * index / steps
+                want_y = dy * index / steps
+                delta_x = int(round(want_x)) - sent_x
+                delta_y = int(round(want_y)) - sent_y
+                if delta_x or delta_y:
+                    self.mouse.scroll(delta_x, delta_y)
+                    sent_x += delta_x
+                    sent_y += delta_y
+                if index < steps:
+                    time.sleep(interval)
+        return {"dx": dx, "dy": dy, "steps": steps, "interval": interval}
+
+    @staticmethod
+    def _drag_path(
+        points: Optional[Sequence[Sequence[int]]],
+        x1: Optional[int],
+        y1: Optional[int],
+        x2: Optional[int],
+        y2: Optional[int],
+    ) -> List[Tuple[int, int]]:
+        """把两种拖拽写法归一到一条路径点列表。
+
+        - ``points=[[x, y], ...]`` (也接受 ``{"x":..,"y":..}``) —— 至少要两个点
+        - ``x1, y1, x2, y2`` —— 等价于两个点的路径 (向后兼容老调用)
+        """
+        if points:
+            raw = list(points)
+            if len(raw) < 2:
+                raise ValueError("points 至少需要两个点 (起点与终点)")
+            path: List[Tuple[int, int]] = []
+            for item in raw:
+                if isinstance(item, dict):
+                    px, py = item.get("x"), item.get("y")
+                else:
+                    try:
+                        seq = list(item)
+                    except TypeError:
+                        raise ValueError(f"每个路径点必须是 [x, y], 收到 {item!r}")
+                    if len(seq) != 2:
+                        raise ValueError(f"每个路径点必须是 [x, y], 收到 {item!r}")
+                    px, py = seq
+                if px is None or py is None:
+                    raise ValueError(f"路径点缺少坐标: {item!r}")
+                path.append((int(px), int(py)))
+            return path
+        if x1 is None or y1 is None or x2 is None or y2 is None:
+            raise ValueError("拖动需要 points=[[x,y],...], 或者完整的 x1/y1/x2/y2")
+        return [(int(x1), int(y1)), (int(x2), int(y2))]
 
     def drag(
         self,
-        x1: int,
-        y1: int,
-        x2: int,
-        y2: int,
+        x1: Optional[int] = None,
+        y1: Optional[int] = None,
+        x2: Optional[int] = None,
+        y2: Optional[int] = None,
         button: str = "left",
         duration: float = 0.3,
+        points: Optional[Sequence[Sequence[int]]] = None,
     ) -> dict:
-        """按下 -> 平滑拖动 -> 松开。"""
+        """按下 -> 平滑拖动 -> 松开。
+
+        两种写法:
+
+        - 两点: ``drag(x1, y1, x2, y2)``
+        - 路径点: ``drag(points=[[x, y], [x, y], ...])`` —— 首点按下, 逐段平滑经过,
+          末点松开。``duration`` 是**每段**的时长, 所以总时长 = duration × (点数 − 1)。
+
+        整条路径只按一次、只松一次: 分段时若中途松开, 前台应用会把路径拆成多次
+        独立拖拽 (画图/选文件区间这类操作就废了)。
+        """
+        path = self._drag_path(points, x1, y1, x2, y2)
         btn = self._button(button)
-        self.move_absolute(x1, y1)
+        self.move_absolute(*path[0])
         time.sleep(0.05)
         self.mouse.press(btn)
         try:
-            self.move_smooth(x2, y2, duration)
+            for _, end in zip(path, path[1:]):
+                self.move_smooth(end[0], end[1], duration)
         finally:
             time.sleep(0.05)
             self.mouse.release(btn)
-        return {"from": [int(x1), int(y1)], "to": [int(x2), int(y2)], "button": button}
+        return {
+            "from": list(path[0]),
+            "to": list(path[-1]),
+            "button": button,
+            "points": [list(point) for point in path],
+            "segments": len(path) - 1,
+        }
 
     @staticmethod
     def _button(button: str) -> Button:
@@ -443,24 +541,52 @@ class InputController(PynputMouseController):
         self._dispatch(run)
         return {"key": key, "action": action, "modifiers": list(modifiers or [])}
 
-    def hotkey(self, keys: Iterable[str]) -> dict:
-        """组合键: ``hotkey(["ctrl", "shift", "s"])`` 或 ``hotkey("ctrl+shift+s")``。"""
+    def hotkey(self, keys: Iterable[str], hold_ms: float = 0.0) -> dict:
+        """组合键: ``hotkey(["ctrl", "shift", "s"])`` 或 ``hotkey("ctrl+shift+s")``。
+
+        ``hold_ms>0`` 时在**全部按下之后**保持这么久再逆序松开。有些软件只在按键
+        处于"持续按下"状态时才响应 (菜单快捷键、游戏里的组合键), 瞬时 down+up 会被
+        忽略 —— 和 ``click()`` 的 ``hold`` 是同一类问题, 默认 0 保持原行为不变。
+        """
         if isinstance(keys, str):
             parts = [p for p in keys.replace(" ", "").split("+") if p]
         else:
             parts = [str(k) for k in keys]
         if not parts:
             raise ValueError("组合键不能为空")
+        hold_ms = max(0.0, float(hold_ms or 0.0))
         resolved = [self._ensure_key(p) for p in parts]
 
         def run():
             for key in resolved:
                 self.keyboard.press(key)
+            if hold_ms:
+                time.sleep(hold_ms / 1000.0)
             for key in reversed(resolved):
                 self.keyboard.release(key)
 
         self._dispatch(run)
-        return {"keys": parts}
+        return {"keys": parts, "hold_ms": hold_ms}
+
+    def hold_key(self, key: Union[str, Key], ms: float) -> dict:
+        """按住 ``key`` 保持 ``ms`` 毫秒再松开。
+
+        给"需要长按"的场景用: F2 重命名 (按早了 / 按短了会触发别的行为)、按住
+        方向键连续滚动、某些游戏的长按蓄力。``ms`` 必须 > 0, 只是想敲一下请用
+        ``tap_key`` / ``keyboard.key`` (action=tap)。
+        """
+        ms = float(ms or 0.0)
+        if ms <= 0:
+            raise ValueError("hold 需要 ms > 0 (只想敲一下请用 keyboard.key 的 tap)")
+        resolved = self._ensure_key(key)
+
+        def run():
+            self.keyboard.press(resolved)
+            time.sleep(ms / 1000.0)
+            self.keyboard.release(resolved)
+
+        self._dispatch(run)
+        return {"key": key, "ms": ms}
 
     # ---------------- 剪贴板粘贴 ----------------
     def paste_text(self, text: str) -> dict:

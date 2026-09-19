@@ -6,18 +6,17 @@
 #
 # 安装: pip install -r requirements.txt -r requirements-remote.txt
 #
-# 说明:
-#   - mss 是**可选**的截屏后端 (跨平台, 走 XShm/Win32/CoreGraphics, 最快)。
-#     没装也能用: remote/screen.py 会自动降级到 Pillow.ImageGrab 或 ffmpeg x11grab。
-#     本机 (WSLg) 实测 Pillow.ImageGrab 会 BadMatch, 所以 Linux 上更推荐装 mss。
-#   - grpcio-tools 只在需要重新生成 proto 存根时才要 (bash remote/proto/gen_proto.sh)。
+# 版本下限的依据 (2026-09-20):
+#   - protobuf: remote/proto/ 下的存根由 protoc **7.35.1** 生成, 运行时低于它会在
+#     import 时被 runtime_version 校验直接拒绝。改 proto 重新生成后要同步这个下限。
+#   - grpcio: 生成的存根用了 `_registered_method` 参数 (grpcio 1.63 起才有)。
+#   - 截屏只有一个后端 **PIL.ImageGrab** (由 requirements.txt 的 Pillow 提供);
+#     早先文档里写的 mss / ffmpeg x11grab 降级链已不存在, 相应依赖也不再需要。
+#   - grpcio-tools 只在重新生成 proto 存根时才要 (bash remote/proto/gen_proto.sh)。
 
 websockets>=13
-grpcio>=1.60
-protobuf>=5.26
+grpcio>=1.63
+protobuf>=7.35
 
-# 可选: 更快的截屏后端
-mss>=9.0
-
-# 可选: 只在改 proto 后重新生成存根时需要
-# grpcio-tools>=1.60
+# 可选: 只在改 proto 后重新生成存根时需要 (与存根的生成版本保持一致)
+# grpcio-tools>=1.84

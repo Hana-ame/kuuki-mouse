@@ -5,7 +5,7 @@ import warnings
 
 from . import kuuki_remote_pb2 as kuuki__remote__pb2
 
-GRPC_GENERATED_VERSION = '1.71.0'
+GRPC_GENERATED_VERSION = '1.84.0'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -18,14 +18,14 @@ except ImportError:
 if _version_not_supported:
     raise RuntimeError(
         f'The grpc package installed is at version {GRPC_VERSION},'
-        + f' but the generated code in kuuki_remote_pb2_grpc.py depends on'
+        + ' but the generated code in kuuki_remote_pb2_grpc.py depends on'
         + f' grpcio>={GRPC_GENERATED_VERSION}.'
         + f' Please upgrade your grpc module to grpcio>={GRPC_GENERATED_VERSION}'
         + f' or downgrade your generated code using grpcio-tools<={GRPC_VERSION}.'
     )
 
 
-class RemoteControlStub(object):
+class RemoteControlStub:
     """---------------------------------------------------------------- 服务
 
     """
@@ -91,6 +91,11 @@ class RemoteControlStub(object):
                 request_serializer=kuuki__remote__pb2.ScrollRequest.SerializeToString,
                 response_deserializer=kuuki__remote__pb2.Ack.FromString,
                 _registered_method=True)
+        self.ScrollHorizontal = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/ScrollHorizontal',
+                request_serializer=kuuki__remote__pb2.ScrollRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.Ack.FromString,
+                _registered_method=True)
         self.Drag = channel.unary_unary(
                 '/kuuki.remote.v1.RemoteControl/Drag',
                 request_serializer=kuuki__remote__pb2.DragRequest.SerializeToString,
@@ -111,6 +116,16 @@ class RemoteControlStub(object):
                 request_serializer=kuuki__remote__pb2.HotkeyRequest.SerializeToString,
                 response_deserializer=kuuki__remote__pb2.Ack.FromString,
                 _registered_method=True)
+        self.Combo = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/Combo',
+                request_serializer=kuuki__remote__pb2.ComboRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.Ack.FromString,
+                _registered_method=True)
+        self.HoldKey = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/HoldKey',
+                request_serializer=kuuki__remote__pb2.KeyHoldRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.Ack.FromString,
+                _registered_method=True)
         self.PasteText = channel.unary_unary(
                 '/kuuki.remote.v1.RemoteControl/PasteText',
                 request_serializer=kuuki__remote__pb2.PasteTextRequest.SerializeToString,
@@ -128,7 +143,7 @@ class RemoteControlStub(object):
                 _registered_method=True)
 
 
-class RemoteControlServicer(object):
+class RemoteControlServicer:
     """---------------------------------------------------------------- 服务
 
     """
@@ -202,6 +217,12 @@ class RemoteControlServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ScrollHorizontal(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def Drag(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -222,6 +243,18 @@ class RemoteControlServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def Hotkey(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Combo(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def HoldKey(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -305,6 +338,11 @@ def add_RemoteControlServicer_to_server(servicer, server):
                     request_deserializer=kuuki__remote__pb2.ScrollRequest.FromString,
                     response_serializer=kuuki__remote__pb2.Ack.SerializeToString,
             ),
+            'ScrollHorizontal': grpc.unary_unary_rpc_method_handler(
+                    servicer.ScrollHorizontal,
+                    request_deserializer=kuuki__remote__pb2.ScrollRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.Ack.SerializeToString,
+            ),
             'Drag': grpc.unary_unary_rpc_method_handler(
                     servicer.Drag,
                     request_deserializer=kuuki__remote__pb2.DragRequest.FromString,
@@ -323,6 +361,16 @@ def add_RemoteControlServicer_to_server(servicer, server):
             'Hotkey': grpc.unary_unary_rpc_method_handler(
                     servicer.Hotkey,
                     request_deserializer=kuuki__remote__pb2.HotkeyRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.Ack.SerializeToString,
+            ),
+            'Combo': grpc.unary_unary_rpc_method_handler(
+                    servicer.Combo,
+                    request_deserializer=kuuki__remote__pb2.ComboRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.Ack.SerializeToString,
+            ),
+            'HoldKey': grpc.unary_unary_rpc_method_handler(
+                    servicer.HoldKey,
+                    request_deserializer=kuuki__remote__pb2.KeyHoldRequest.FromString,
                     response_serializer=kuuki__remote__pb2.Ack.SerializeToString,
             ),
             'PasteText': grpc.unary_unary_rpc_method_handler(
@@ -348,7 +396,7 @@ def add_RemoteControlServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class RemoteControl(object):
+class RemoteControl:
     """---------------------------------------------------------------- 服务
 
     """
@@ -651,6 +699,33 @@ class RemoteControl(object):
             _registered_method=True)
 
     @staticmethod
+    def ScrollHorizontal(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/ScrollHorizontal',
+            kuuki__remote__pb2.ScrollRequest.SerializeToString,
+            kuuki__remote__pb2.Ack.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def Drag(request,
             target,
             options=(),
@@ -747,6 +822,60 @@ class RemoteControl(object):
             target,
             '/kuuki.remote.v1.RemoteControl/Hotkey',
             kuuki__remote__pb2.HotkeyRequest.SerializeToString,
+            kuuki__remote__pb2.Ack.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Combo(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/Combo',
+            kuuki__remote__pb2.ComboRequest.SerializeToString,
+            kuuki__remote__pb2.Ack.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def HoldKey(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/HoldKey',
+            kuuki__remote__pb2.KeyHoldRequest.SerializeToString,
             kuuki__remote__pb2.Ack.FromString,
             options,
             channel_credentials,

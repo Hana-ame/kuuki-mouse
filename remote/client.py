@@ -28,7 +28,7 @@ from typing import Any, Dict, Optional
 if __package__ in (None, ""):  # pragma: no cover
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from remote.service import VERSION  # noqa: E402
+from remote.service import VERSION, parse_points  # noqa: E402
 from remote.ws_server import decode_frame  # noqa: E402
 
 try:
@@ -148,9 +148,26 @@ class GrpcClient:
         self.timeout = timeout
         self.channel = grpc.insecure_channel(target)
         self.stub = pb_grpc.RemoteControlStub(self.channel)
-        # 默认 MessageToDict 会把字段转成 lowerCamelCase, 与 WS 侧的 snake_case 不一致;
-        # 这里保留 proto 字段名, 让两种传输吐出来的 JSON 长得一样。
-        self._to_dict = lambda message: MessageToDict(message, preserving_proto_field_name=True)
+
+        def _to_dict(message):
+            """protobuf -> dict, 尽量与 WS 侧的 JSON 长得一样。
+
+            两个默认行为都要改:
+            - 字段名默认转 lowerCamelCase, 与 WS 的 snake_case 不一致;
+            - **取默认值的字段默认被省略** —— proto3 标量没有存在性, 光标恰好在
+              ``y=0`` 时 ``{"x":1396,"y":0}`` 会变成只有 x, 控制端读 ``pos["y"]``
+              就 KeyError。WS 侧永远给全, 所以这里也必须给全。
+            """
+            try:
+                return MessageToDict(
+                    message,
+                    preserving_proto_field_name=True,
+                    always_print_fields_with_no_presence=True,
+                )
+            except TypeError:  # pragma: no cover - 老版本 protobuf 没这个参数
+                return MessageToDict(message, preserving_proto_field_name=True)
+
+        self._to_dict = _to_dict
 
     def __enter__(self) -> "GrpcClient":
         return self
@@ -191,6 +208,42 @@ class GrpcClient:
         rect = self._rect(args.get("region"))
         if rect is not None:
             request.region.CopyFrom(rect)
+        return request
+
+    def _scroll_request(self, args: dict):
+        pb = self._pb
+        request = pb.ScrollRequest(
+            dx=int(args.get("dx", 0) or 0),
+            dy=int(args.get("dy", args.get("delta", 0)) or 0),
+            steps=int(args.get("steps", 0) or 0),
+        )
+        # interval / x / y 是 optional 字段: 只在 args 里真的有时才设,
+        # 让"没给"与"显式给 0"在服务端仍能区分开 (与 WS 侧一致)。
+        if args.get("interval") is not None:
+            request.interval = float(args["interval"])
+        if args.get("x") is not None:
+            request.at_x = int(args["x"])
+        if args.get("y") is not None:
+            request.at_y = int(args["y"])
+        return request
+
+    def _drag_request(self, args: dict):
+        pb = self._pb
+        request = pb.DragRequest(button=args.get("button", "left"))
+        # 不要用 ``args.get("duration", 0.3) or 0.3``: 那样显式传 0 会被换成 0.3。
+        if args.get("duration") is not None:
+            request.duration = float(args["duration"])
+        points = args.get("points")
+        if points is None and args.get("path") is not None:
+            points = args.get("path")
+        if points:
+            for px, py in parse_points(points):
+                request.points.append(pb.Point(x=int(px), y=int(py)))
+        else:
+            request.x1 = int(args.get("x1", 0) or 0)
+            request.y1 = int(args.get("y1", 0) or 0)
+            request.x2 = int(args.get("x2", 0) or 0)
+            request.y2 = int(args.get("y2", 0) or 0)
         return request
 
     def screenshot(self, args: Optional[dict] = None) -> bytes:
@@ -254,19 +307,13 @@ class GrpcClient:
                 pb.MouseButtonRequest(button=args.get("button", "left")), **self._kwargs()
             ),
             "mouse.scroll": lambda: self.stub.Scroll(
-                pb.ScrollRequest(dx=int(args.get("dx", 0)), dy=int(args.get("dy", 0))),
-                **self._kwargs(),
+                self._scroll_request(args), **self._kwargs()
+            ),
+            "mouse.scroll_h": lambda: self.stub.ScrollHorizontal(
+                self._scroll_request(args), **self._kwargs()
             ),
             "mouse.drag": lambda: self.stub.Drag(
-                pb.DragRequest(
-                    x1=int(args.get("x1", 0)),
-                    y1=int(args.get("y1", 0)),
-                    x2=int(args.get("x2", 0)),
-                    y2=int(args.get("y2", 0)),
-                    button=args.get("button", "left"),
-                    duration=float(args.get("duration", 0.3) or 0.3),
-                ),
-                **self._kwargs(),
+                self._drag_request(args), **self._kwargs()
             ),
             "keyboard.type": lambda: self.stub.TypeText(
                 pb.TypeTextRequest(
@@ -283,8 +330,20 @@ class GrpcClient:
                 **self._kwargs(),
             ),
             "keyboard.hotkey": lambda: self.stub.Hotkey(
-                pb.HotkeyRequest(
-                    keys=args["keys"] if isinstance(args.get("keys"), list) else [args.get("keys", "")]
+                pb.HotkeyRequest(keys=_combo_keys(args)),
+                **self._kwargs(),
+            ),
+            "keyboard.combo": lambda: self.stub.Combo(
+                pb.ComboRequest(
+                    keys=_combo_keys(args),
+                    hold_ms=float(args.get("hold_ms", args.get("hold", 0)) or 0),
+                ),
+                **self._kwargs(),
+            ),
+            "keyboard.hold": lambda: self.stub.HoldKey(
+                pb.KeyHoldRequest(
+                    key=str(args.get("key", "")),
+                    ms=float(args.get("ms", args.get("hold_ms", args.get("duration", 0))) or 0),
                 ),
                 **self._kwargs(),
             ),
@@ -403,6 +462,21 @@ def _shot_args(args: argparse.Namespace) -> dict:
     if args.region:
         out["region"] = [int(v) for v in args.region.split(",")]
     return out
+
+
+def _combo_keys(args: dict) -> list:
+    """组合键参数归一成键名列表。
+
+    protobuf 那边是 ``repeated string keys``, 传不了 ``"ctrl+shift+s"`` 这种写法,
+    所以必须在这里拆开 —— 否则它会被当成**一个**叫 ``ctrl+shift+s`` 的键,
+    服务端解析报 "未知键名"。WebSocket 侧传字符串本来就能走 service 的拆分逻辑,
+    两边行为对齐靠的就是这里。
+    """
+    raw = args.get("keys") or args.get("combo") or args.get("key") or ""
+    if isinstance(raw, str):
+        parts = [p for p in raw.replace(" ", "").split("+") if p]
+        return parts or [""]
+    return [str(k) for k in raw]
 
 
 async def _run_ws(args: argparse.Namespace) -> int:

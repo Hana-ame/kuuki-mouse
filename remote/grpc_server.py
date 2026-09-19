@@ -118,52 +118,12 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             clipboard_tool=info.get("clipboard_tool") or "",
             token_required=bool(info.get("token_required")),
             uptime_s=float(info.get("uptime_s", 0.0)),
-            screen_error=info.get("screen_error") or "",
         )
-        for mon in info.get("monitors", []):
-            message.monitors.append(
-                pb.Monitor(
-                    index=int(mon.get("index", 0)),
-                    left=int(mon.get("left", 0)),
-                    top=int(mon.get("top", 0)),
-                    width=int(mon.get("width", 0)),
-                    height=int(mon.get("height", 0)),
-                    primary=bool(mon.get("primary")),
-                    name=mon.get("name", ""),
-                )
-            )
-        for backend in info.get("capture_backends", []):
-            message.capture_backends.append(
-                pb.BackendStatus(
-                    name=backend.get("name", ""),
-                    available=bool(backend.get("available")),
-                    reason=backend.get("reason") or "",
-                )
-            )
         cursor = _point_to(info.get("cursor"))
         if cursor is not None:
             message.cursor.CopyFrom(cursor)
         message.capabilities.extend(info.get("capabilities", []))
         return message
-
-    def GetMonitors(self, request, context):
-        self._check_auth(context)
-        with _translate(context):
-            result = self.service.handle("screen.monitors", {})
-        out = pb.MonitorList()
-        for mon in result.get("monitors", []):
-            out.monitors.append(
-                pb.Monitor(
-                    index=int(mon.get("index", 0)),
-                    left=int(mon.get("left", 0)),
-                    top=int(mon.get("top", 0)),
-                    width=int(mon.get("width", 0)),
-                    height=int(mon.get("height", 0)),
-                    primary=bool(mon.get("primary")),
-                    name=mon.get("name", ""),
-                )
-            )
-        return out
 
     # ---------------- 截屏 ----------------
     @staticmethod
@@ -171,7 +131,6 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
         args = {
             "format": request.format or "png",
             "quality": int(request.quality) or 80,
-            "monitor": int(request.monitor),
             "draw_cursor": bool(request.draw_cursor),
         }
         if request.HasField("region"):
@@ -197,8 +156,6 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             height=capture.height,
             source_width=capture.source_width,
             source_height=capture.source_height,
-            backend=capture.backend,
-            monitor=capture.monitor,
             scale=capture.scale,
             captured_at=capture.captured_at,
             duration_ms=capture.duration_ms,

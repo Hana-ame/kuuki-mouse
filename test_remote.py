@@ -19,7 +19,7 @@ import pytest
 from PIL import Image
 
 from remote.input import InputController, KeyUnsupported, resolve_key
-from remote.screen import Monitor, Region, ScreenCapture
+from remote.screen import Region, ScreenCapture
 from remote.service import RemoteError, RemoteService
 from remote.ws_server import WsServer, decode_frame, encode_frame
 
@@ -34,38 +34,26 @@ def run(coro):
 # ================================================================ 假后端
 
 
-class FakeBackend:
-    """内存里的假屏幕: 200x100, 在 (50,25) 放一个白点。"""
+def fake_screen() -> ScreenCapture:
+    """造一个 ScreenCapture, 但 grab_image 打桩成内存里的假屏幕 (200x100)。
 
-    name = "fake"
-    priority = 1
+    不需要假后端了 —— 只有一个后端, 直接换掉它的抓图方法。
+    """
+    screen = ScreenCapture()
 
-    def available(self):
-        return True, ""
-
-    def screen_size(self):
-        return 200, 100
-
-    def monitors(self):
-        return [Monitor(0, 0, 0, 200, 100, primary=True, name="fake")]
-
-    def grab_image(self):
+    def fake_grab():
         image = Image.new("RGB", (200, 100), (10, 20, 30))
         image.putpixel((50, 25), (255, 255, 255))
         return image
 
-
-def fake_screen() -> ScreenCapture:
-    screen = ScreenCapture(backend="auto")
-    screen._catalog = [FakeBackend()]  # type: ignore[list-item]
-    screen._active = None
-    screen._failed = {}
+    screen.grab_image = fake_grab  # type: ignore[method-assign]
     return screen
 
 
 def has_real_backend() -> bool:
+    """本机能不能真的抓屏 (不能就跳过那些端到端测试)。"""
     try:
-        ScreenCapture(backend="auto").active_backend()
+        ScreenCapture().screen_size()
         return True
     except Exception:
         return False
@@ -122,7 +110,6 @@ def test_capture_full_frame_and_encoding():
         capture, data = _capture(screen, {"format": fmt})
         assert capture.width == 200 and capture.height == 100
         assert capture.source_width == 200
-        assert capture.backend == "fake"
         assert data[:2] == (b"\x89P" if fmt == "png" else b"\xff\xd8" if fmt == "jpeg" else b"RI")
     with pytest.raises(ValueError):
         _capture(screen, {"format": "bmp"})
@@ -188,7 +175,7 @@ def test_service_dispatch_basics():
 
     info = service.handle("info", {})
     assert info["os"] and info["python"]
-    assert info["monitors"][0]["width"] == 200
+    assert info["os"]
     assert "mouse.move" in info["capabilities"]
 
     # 别名

@@ -59,12 +59,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="允许绑非回环地址 (必须同时设置 --token)",
     )
-    parser.add_argument(
-        "--backend",
-        default="auto",
-        choices=["auto", "mss", "pillow", "ffmpeg"],
-        help="截屏后端",
-    )
     parser.add_argument("--max-fps", type=float, default=30.0, help="screen.watch 的帧率上限")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     parser.add_argument("--json", action="store_true", help="启动时以 JSON 打印端点信息")
@@ -93,7 +87,7 @@ def selftest(service: RemoteService, with_input: bool = False) -> int:
     try:
         capture, data = service.capture({"format": "png"})
         print(
-            f"  后端={capture.backend} 尺寸={capture.width}x{capture.height} "
+            f"  尺寸={capture.width}x{capture.height} "
             f"源尺寸={capture.source_width}x{capture.source_height} "
             f"字节={len(data)} 耗时={capture.duration_ms:.0f}ms"
         )
@@ -134,7 +128,7 @@ async def run_servers(args: argparse.Namespace) -> int:
     if args.allow_remote and host == "127.0.0.1":
         host = "0.0.0.0"
 
-    service = RemoteService(backend=args.backend, token=token)
+    service = RemoteService(token=token)
     ws_server = None
     grpc_server = None
     peerjs_server = None
@@ -172,7 +166,6 @@ async def run_servers(args: argparse.Namespace) -> int:
                 state = "已注册" if endpoint["ready"] else "未注册"
                 print(f"  PeerJS    : {endpoint['peer_id']}  ({state}, {endpoint['broker']})")
         print(f"  token     : {'已设置' if token else '未设置 (仅回环安全)'}")
-        print(f"  截屏后端  : {args.backend} (auto = mss -> pillow -> ffmpeg 自动降级)")
         print("  客户端示例: python -m remote.client ws ping")
         sys.stdout.flush()
 
@@ -208,7 +201,7 @@ def main(argv=None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     if args.selftest:
-        return selftest(RemoteService(backend=args.backend, token=args.token), args.selftest_input)
+        return selftest(RemoteService(token=args.token), args.selftest_input)
     try:
         return asyncio.run(run_servers(args))
     except KeyboardInterrupt:  # pragma: no cover

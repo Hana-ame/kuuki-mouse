@@ -18,14 +18,13 @@
 """
 
 from .service import RemoteError, RemoteService, VERSION
-from .screen import Capture, Monitor, Region, ScreenCapture
+from .screen import Capture, Region, ScreenCapture
 
 __all__ = [
     "RemoteError",
     "RemoteService",
     "VERSION",
     "Capture",
-    "Monitor",
     "Region",
     "ScreenCapture",
 ]

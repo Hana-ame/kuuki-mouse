@@ -9,6 +9,7 @@
     python -m remote.client grpc info
     python -m remote.client grpc screenshot /tmp/shot.png
     python -m remote.client grpc stream /tmp/frames --fps 2 --count 5
+    python -m remote.client peerjs --peer kuuki-mouse-ABCDE info
 
 带 token 时加 ``--token XXX`` (WS 会拼进 URL, gRPC 会放进 metadata)。
 """
@@ -182,7 +183,6 @@ class GrpcClient:
         request = pb.ScreenshotRequest(
             format=args.get("format", "png"),
             quality=int(args.get("quality", 80)),
-            monitor=int(args.get("monitor", 0)),
             max_width=int(args.get("max_width", 0) or 0),
             max_height=int(args.get("max_height", 0) or 0),
             scale=float(args.get("scale", 0) or 0),
@@ -221,7 +221,6 @@ class GrpcClient:
         table = {
             "ping": lambda: self.stub.Ping(empty, **self._kwargs()),
             "info": lambda: self.stub.GetInfo(empty, **self._kwargs()),
-            "screen.monitors": lambda: self.stub.GetMonitors(empty, **self._kwargs()),
             "screen.screenshot": lambda: self.stub.Screenshot(self._shot_request(args), **self._kwargs()),
             "mouse.position": lambda: self.stub.GetMousePosition(empty, **self._kwargs()),
             "mouse.move": lambda: self.stub.MoveMouse(
@@ -348,6 +347,13 @@ def _build_parser() -> argparse.ArgumentParser:
     grpc_parser.add_argument("--token", default=None)
     grpc_parser.add_argument("--timeout", type=float, default=30.0)
     _add_actions(grpc_parser)
+
+    # PeerJS: 服务端必须跑在**被控机器**上 (两端各自连 broker, 不需要端口)
+    peer = sub.add_parser("peerjs", help="PeerJS 客户端 (连到被控机器)")
+    peer.add_argument("--peer", required=True, help="被控端 id, 形如 kuuki-mouse-ABCDE")
+    peer.add_argument("--token", default=None)
+    peer.add_argument("--timeout", type=float, default=30.0)
+    _add_actions(peer)
     return parser
 
 
@@ -382,13 +388,12 @@ def _add_shot_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--quality", type=int, default=80)
     parser.add_argument("--max-width", type=int, default=0)
     parser.add_argument("--max-height", type=int, default=0)
-    parser.add_argument("--monitor", type=int, default=0)
     parser.add_argument("--draw-cursor", action="store_true")
     parser.add_argument("--region", default=None, help="left,top,width,height")
 
 
 def _shot_args(args: argparse.Namespace) -> dict:
-    out: Dict[str, Any] = {"format": args.format, "quality": args.quality, "monitor": args.monitor}
+    out: Dict[str, Any] = {"format": args.format, "quality": args.quality}
     if args.max_width:
         out["max_width"] = args.max_width
     if args.max_height:
@@ -478,11 +483,54 @@ def _run_grpc(args: argparse.Namespace) -> int:
     return 2
 
 
+async def _run_peerjs(args: argparse.Namespace) -> int:
+    """PeerJS 客户端: 与服务端同构的 action 集合。"""
+    from remote.peerjs_client import PeerJsClient
+
+    client = PeerJsClient(args.peer, token=args.token, timeout=args.timeout)
+    await client.connect()
+    try:
+        if args.action in ("ping", "info"):
+            print(json.dumps(await client.call(args.action), ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "op":
+            payload = json.loads(args.args)
+            print(
+                json.dumps(
+                    await client.call(args.name, payload), ensure_ascii=False, indent=2
+                )
+            )
+            return 0
+        if args.action == "screenshot":
+            payload = await client.screenshot(_shot_args(args))
+            with open(args.path, "wb") as handle:
+                handle.write(payload)
+            print(json.dumps({"path": args.path, "bytes": len(payload)}, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "watch":
+            # PeerJS 侧没有服务端推流, 用轮询实现 (op 语义一致)
+            started = time.time()
+            for index in range(1, max(1, args.count) + 1):
+                payload = await client.screenshot(_shot_args(args))
+                header = {"format": args.format, "seq": index}
+                path = _write_frame(args.directory, "peerjs", index, header, payload)
+                print(f"  #{index} {len(payload)}B -> {path}")
+                if index < args.count:
+                    await asyncio.sleep(1.0 / max(0.1, args.fps))
+            print(f"共 {args.count} 帧, 用时 {time.time() - started:.1f}s")
+            return 0
+    finally:
+        await client.close()
+    return 2
+
+
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.transport == "ws":
             return asyncio.run(_run_ws(args))
+        if args.transport == "peerjs":
+            return asyncio.run(_run_peerjs(args))
         return _run_grpc(args)
     except KeyboardInterrupt:
         print("\n已中断。")

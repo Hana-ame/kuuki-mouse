@@ -56,11 +56,6 @@ class RemoteControlStub(object):
                 request_serializer=kuuki__remote__pb2.StreamScreenshotsRequest.SerializeToString,
                 response_deserializer=kuuki__remote__pb2.Image.FromString,
                 _registered_method=True)
-        self.GetMonitors = channel.unary_unary(
-                '/kuuki.remote.v1.RemoteControl/GetMonitors',
-                request_serializer=kuuki__remote__pb2.Empty.SerializeToString,
-                response_deserializer=kuuki__remote__pb2.MonitorList.FromString,
-                _registered_method=True)
         self.GetMousePosition = channel.unary_unary(
                 '/kuuki.remote.v1.RemoteControl/GetMousePosition',
                 request_serializer=kuuki__remote__pb2.Empty.SerializeToString,
@@ -159,12 +154,6 @@ class RemoteControlServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def StreamScreenshots(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
-    def GetMonitors(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -280,11 +269,6 @@ def add_RemoteControlServicer_to_server(servicer, server):
                     servicer.StreamScreenshots,
                     request_deserializer=kuuki__remote__pb2.StreamScreenshotsRequest.FromString,
                     response_serializer=kuuki__remote__pb2.Image.SerializeToString,
-            ),
-            'GetMonitors': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetMonitors,
-                    request_deserializer=kuuki__remote__pb2.Empty.FromString,
-                    response_serializer=kuuki__remote__pb2.MonitorList.SerializeToString,
             ),
             'GetMousePosition': grpc.unary_unary_rpc_method_handler(
                     servicer.GetMousePosition,
@@ -467,33 +451,6 @@ class RemoteControl(object):
             '/kuuki.remote.v1.RemoteControl/StreamScreenshots',
             kuuki__remote__pb2.StreamScreenshotsRequest.SerializeToString,
             kuuki__remote__pb2.Image.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetMonitors(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/kuuki.remote.v1.RemoteControl/GetMonitors',
-            kuuki__remote__pb2.Empty.SerializeToString,
-            kuuki__remote__pb2.MonitorList.FromString,
             options,
             channel_credentials,
             insecure,

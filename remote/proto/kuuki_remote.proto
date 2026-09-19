@@ -38,26 +38,6 @@ message Rect {
   int32 height = 4;
 }
 
-message Monitor {
-  int32 index = 1;
-  int32 left = 2;
-  int32 top = 3;
-  int32 width = 4;
-  int32 height = 5;
-  bool primary = 6;
-  string name = 7;
-}
-
-message MonitorList {
-  repeated Monitor monitors = 1;
-}
-
-message BackendStatus {
-  string name = 1;
-  bool available = 2;
-  string reason = 3;
-}
-
 message Info {
   string version = 1;
   string os = 2;
@@ -67,21 +47,17 @@ message Info {
   string user = 6;
   string cwd = 7;
   string display = 8;
-  repeated Monitor monitors = 9;
-  repeated BackendStatus capture_backends = 10;
   string clipboard_tool = 11;
   bool token_required = 12;
   double uptime_s = 13;
   Point cursor = 14;
   repeated string capabilities = 15;
-  string screen_error = 16;
 }
 
 // ---------------------------------------------------------------- 截屏
 
 message ScreenshotRequest {
   Rect region = 1;        // 不给则整屏 / 指定 monitor
-  int32 monitor = 2;      // 0 = 整个虚拟桌面
   string format = 3;      // png / jpeg / webp (默认 png)
   int32 quality = 4;      // jpeg/webp 质量, 默认 80
   int32 max_width = 5;    // 等比缩到不超过该宽 (0 = 不限)
@@ -97,8 +73,6 @@ message Image {
   int32 height = 4;
   int32 source_width = 5;
   int32 source_height = 6;
-  string backend = 7;
-  int32 monitor = 8;
   Rect region = 9;
   double scale = 10;
   double captured_at = 11;
@@ -209,7 +183,6 @@ service RemoteControl {
   // 截屏
   rpc Screenshot(ScreenshotRequest) returns (Image);
   rpc StreamScreenshots(StreamScreenshotsRequest) returns (stream Image);
-  rpc GetMonitors(Empty) returns (MonitorList);
 
   // 鼠标
   rpc GetMousePosition(Empty) returns (Point);

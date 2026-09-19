@@ -13,3 +13,8 @@ build
 # remote/ 的 gRPC 存根是**运行必需**, 不是构建产物 (proto 在 remote/proto/kuuki_remote.proto,
 # 重新生成用 `bash remote/proto/gen_proto.sh`), 所以允许入库。
 !remote/proto/*.py
+
+# ---- 演示/测试产物不入库 ----
+play/
+_clicks.jsonl
+_events.jsonl

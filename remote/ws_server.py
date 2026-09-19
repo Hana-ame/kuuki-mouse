@@ -265,7 +265,7 @@ class WsServer:
                         "bytes": len(data),
                         "ts": capture.captured_at,
                         "duration_ms": round(capture.duration_ms, 2),
-                        "backend": capture.backend,
+                        "backend": "pillow",
                         "region": capture.region.to_dict() if capture.region else None,
                     }
                     await conn.send(encode_frame(header, data))
@@ -318,7 +318,7 @@ class WsServer:
                     "bytes": len(data),
                     "ts": capture.captured_at,
                     "duration_ms": round(capture.duration_ms, 2),
-                    "backend": capture.backend,
+                    "backend": "pillow",
                 }
                 await conn.send(encode_frame(header, data))
                 if count and seq >= count:

@@ -458,7 +458,7 @@ def _run_grpc(args: argparse.Namespace) -> int:
                     "format": image.format,
                     "width": image.width,
                     "height": image.height,
-                    "backend": image.backend,
+                    "backend": "pillow",
                     "duration_ms": round(image.duration_ms, 2),
                 },
                 ensure_ascii=False,

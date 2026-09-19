@@ -197,6 +197,12 @@ class PeerJsServer:
         from peerjs.enums import ConnectionEventType, PeerEventType
         from peerjs.peer import Peer, PeerOptions
 
+        # 过滤掉不可用的本机 ICE 候选 (断开的虚拟网卡常留 169.254.x.x,
+        # aioice 会去 bind 它们并失败, 导致 P2P 通道建不起来) —— 见 remote/ice.py
+        from .ice import patch_aioice_addresses
+
+        patch_aioice_addresses()
+
         # fork 的 PeerOptions.secure 默认 False, 但 cloud broker 只收 wss(443)
         self._peer = Peer(self.peer_id, PeerOptions(secure=self.secure))
         self._loop = asyncio.get_running_loop()

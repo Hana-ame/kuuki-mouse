@@ -50,6 +50,10 @@ class PeerJsClient:
         from peerjs.enums import ConnectionEventType, PeerEventType
         from peerjs.peer import Peer, PeerOptions
 
+        from .ice import patch_aioice_addresses
+
+        patch_aioice_addresses()
+
         # 客户端用随机 id (空 id 让 broker 分配)
         self._peer = Peer(None, PeerOptions(secure=self.secure))
 

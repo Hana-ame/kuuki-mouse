@@ -42,7 +42,28 @@ class Socket(AsyncIOEventEmitter):
         """Connect to WebSockets server."""
         assert wss_url
         # connect to websocket
-        websocket = await websockets.connect(wss_url, ping_interval=5)
+        #
+        # NOTE (本仓库补丁 9): 显式优先 IPv4。
+        # 某些 Windows 环境里 0.peerjs.com 的 AAAA 记录可解析、TCP 也连得上,
+        # 但 IPv6 路径实际不通 —— 表现为 TLS 握手超时:
+        #   TimeoutError: timed out during opening handshake
+        # 而 curl --ipv4 秒开 (实测 2s vs 20s 超时)。asyncio 默认按 getaddrinfo
+        # 顺序取地址, 双栈环境里往往先试 IPv6, 于是必然超时。
+        # NOTE (本仓库补丁 10): 放宽协议层 ping。
+        # 上游只写 ping_interval=5 而不写 ping_timeout, websockets 默认
+        # ping_timeout=20s。跨网络(尤其 Windows 侧走公网 broker)时一次抖动就会
+        # 被判超时断开, 实测日志:
+        #   WARNING peerjs.peer: Connection error: Lost connection to server.
+        # 断开后信令丢失, 对端(控制端)连接必然超时。
+        # 注意: PeerJS 官方那 5 秒是**应用层** ping ({"ping":"once"} 那条), 与
+        # websockets 的协议层 ping 是两回事, 不该把两者混为一谈。
+        websocket = await websockets.connect(
+            wss_url,
+            ping_interval=20,
+            ping_timeout=60,
+            close_timeout=5,
+            **self._address_family_kwargs(wss_url)
+        )
         self._sendQueuedMessages()
         log.debug("WebSockets open")
         await websocket.send(
@@ -50,6 +71,25 @@ class Socket(AsyncIOEventEmitter):
         )
         self._disconnected = False
         return websocket
+
+    @staticmethod
+    def _address_family_kwargs(wss_url: str) -> dict:
+        """给 websockets.connect 准备「优先 IPv4」的参数 (解析失败则不加)。"""
+        try:
+            import socket as _socket
+            from urllib.parse import urlparse
+
+            host = urlparse(wss_url).hostname
+            if not host:
+                return {}
+            infos = _socket.getaddrinfo(host, None, type=_socket.SOCK_STREAM)
+            families = {info[0] for info in infos}
+            if _socket.AF_INET in families and _socket.AF_INET6 in families:
+                # 双栈: 只留 IPv4, 绕开不通的 v6 路径
+                return {"family": _socket.AF_INET}
+        except Exception:
+            pass
+        return {}
 
     async def _receive(self, websocket=None):
         assert self._websocket

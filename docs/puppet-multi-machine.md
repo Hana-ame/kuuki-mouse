@@ -11,18 +11,21 @@
   - 屏幕：单帧截屏（png/jpeg/webp、region、光标）、连续帧 watch。
 - **传输等价**：同一套 op 在 WS / gRPC / PeerJS 下行为一致（三个传输都只是 `RemoteService.handle(op, args)` 的翻译层）。
 - **自验证**：动作结果由被控端测试靶回传事件文件判定，不靠肉眼。
+- **平台**：**agent（被控端）只支持 Windows** —— 它必须原生跑在 Windows 上，非 Windows 会在
+  启动前直接拒绝（退出码 2，见 `remote/README.md` 开头与 `remote/__main__.py` 的
+  `platform_refusal()`）。controller 不限平台，WSL / Linux / 手机都能当控制端。
 
 ## 1. 架构
 
 ```
 controller (本机)
-  kuuki_ctl CLI ── registry.json ──┬─> agent A: 传输 ws/grpc/peerjs ──> Windows/Linux/macOS
+  kuuki_ctl CLI ── registry.json ──┬─> agent A: 传输 ws/grpc/peerjs ──> Windows (agent 只能跑在 Windows)
                                     └─> agent B: ...                        (各跑 remote 服务)
 ```
 
 - **agent** = 现有 `remote/` 包（service 层 + 三传输）。每台一个唯一房间码/别名。
 - **controller** = 新 `kuuki_ctl` CLI：机器注册表 + 动作分发 + 批处理 + 截图循环。
-- 寻址：`registry.json` 把 **别名** 映射到 `{transport, endpoint/peer, token, os}`；PeerJS 下 agent 固定注册为 `kuuki-mouse-<房间码>`，房间码即地址。
+- 寻址：`registry.json` 把 **别名** 映射到 `{transport, endpoint/peer, token, os}`；PeerJS 下 agent 固定注册为 `kuuki-mouse-<房间码>`，房间码即地址。其中 `os` 恒为 `win`（agent 只支持 Windows），留着是为了将来真出现多平台时不用改数据结构。
 
 ## 2. 传输矩阵（按场景选）
 
@@ -49,7 +52,7 @@ controller (本机)
 | `mouse.down` / `mouse.up` | 按住/松开 | button |
 | `mouse.scroll` | 滚轮（单步） | dx, dy |
 | `mouse.drag` | 两点拖动：按下→平滑→松开 | x1,y1,x2,y2, button, duration |
-| `keyboard.type` | 文本输入（逐字符 interval；X11 预检，中文建议 paste） | text, interval |
+| `keyboard.type` | 文本输入（逐字符 interval；中文/emoji 必须改用 `keyboard.paste`） | text, interval |
 | `keyboard.key` | 单键 tap/press/release + 修饰键 | key, action, modifiers |
 | `keyboard.hotkey` | 组合键：依序按下→逆序松开 | keys=["ctrl","shift","s"] 或 "ctrl+shift+s" |
 | `keyboard.paste` | 剪贴板 + Ctrl+V（中文/emoji 可靠输入） | text |
@@ -88,7 +91,7 @@ kuuki_ctl tail <alias>           # 连续 watch 存帧目录（回显窗口）
 
 - `pack/agent/`：`remote/` 包 + `requirements.txt` + `config.json`（token/传输/房间码）+ 启动脚本：
   - Windows：`start-agent.bat`（venv 检测、代理变量清理，同 start-win.bat 做法）
-  - Linux/macOS：`start-agent.sh` + systemd/launchd 单元（可选常驻）
+  - ~~Linux/macOS：`start-agent.sh` + systemd/launchd 单元~~ —— 已删：agent 只支持 Windows
 - **PyInstaller 单文件** `kuuki-agent.exe`（可选）：目标机免装 Python，双击即跑。
 - 启动打印：房间码 / peer id / 端口 / 鉴权要求；日志写文件。
 - 安全：默认要求 token；`--allow-remote` 必须同时带 token；PeerJS 房间码 + token 双因子。
@@ -128,8 +131,8 @@ kuuki_ctl tail <alias>           # 连续 watch 存帧目录（回显窗口）
 
 ## 9. 本机已有可复用资产
 
-- `remote/` 三传输 + op 注册表（本次 WS 跨 WSL→Windows 已实测：`ping` 通、1680×1050 截图 132ms）
+- `remote/` 三传输 + op 注册表（2026-09-19 跨机 WS 实测：`ping` 通、1680×1050 截图 132ms；agent 侧现在只允许 Windows）
 - `click.html` + `p2p_clicktarget.py`：点击自验证靶（`_clicks.jsonl`）
 - `annotate.py`：截图 overlay 网格标注（排障用）
 - `remote/toast.py`：无焦点通知（操作前提示不抢焦点）
-- 修复待提交：`ws_server.py` 两处 `capture.backend` → `"pillow"`（screen 重构后遗留的 AttributeError，已修未提交）
+- 已提交（`1f2f354`）：`ws_server.py` 两处 `capture.backend` → `"pillow"`（screen 重构后遗留的 AttributeError）

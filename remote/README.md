@@ -4,12 +4,23 @@
 用鼠标、键盘操作这台机器, 并且能把屏幕截图取回来; 通过 **PeerJS** / **WebSocket** /
 **gRPC** 三种传输对外暴露, 供 agent / 脚本 / 别的机器调用。三者 op 语义完全一致。
 
+> ### ⚠️ 受控端只支持 Windows
+> "受控端"指**被操作的那台机器**, 也就是这里这个服务本身 —— 它必须**原生跑在
+> Windows 上**。非 Windows 会在启动之前直接拒绝 (退出码 2, 提示里给出可照做的命令,
+> 见第 2 节)。WSL / Linux / 手机一侧只跑**客户端** (`python -m remote.client …`),
+> 客户端不挑平台。
+>
+> 这条是**产品定位**, 不是临时限制: 屏幕采集走 `PIL.ImageGrab`, 输入注入走 pynput
+> 的 Win32 后端, 目标桌面只有 Windows 一种。曾经在 WSLg / X11 上跑过, 那些分支在
+> 代码里保留作参考但**不再维护** (第 8 节留了当时的实测结论)。
+
 ```
 ┌──────────────┐   PeerJS   kuuki-mouse-<房间码>    ┌─────────────────────────┐
 │ agent / 脚本 │   WebSocket  ws://127.0.0.1:8765    │  RemoteService (ops)    │
 │ 手机 / 异地  │◄───────────────────────────────────►│   ├─ InputController    │──► pynput ──► 鼠标/键盘
-└──────────────┘   gRPC       127.0.0.1:50051        │   └─ ScreenCapture      │──► mss / Pillow / ffmpeg
+└──────────────┘   gRPC       127.0.0.1:50051        │   └─ ScreenCapture      │──► PIL.ImageGrab
                                                      └─────────────────────────┘
+                                              (右半边这一整块只在 Windows 上跑)
 ```
 
 **只做三件事**: ① 控制鼠标键盘; ② 抓屏并编码返回; ③ 顺带兼容原有空气鼠标协议
@@ -24,8 +35,9 @@
 pip install -r requirements.txt -r requirements-remote.txt
 ```
 
-- `pynput` / `Pillow` 已由 `requirements.txt` 提供, 不重复安装。
-- `mss` 是可选后端, 没装会自动降级 (见第 6 节)。
+- **服务端只装/只跑在 Windows 上** (见开头的定位说明); 客户端用同一份依赖, 平台不限。
+- `pynput` / `Pillow` 已由 `requirements.txt` 提供, 不重复安装。截屏只有一个后端
+  (`PIL.ImageGrab`), 没有可选后端也没有降级链 —— 见第 8 节。
 - gRPC 存根已随仓库提供 (`remote/proto/kuuki_remote_pb2*.py`); 改过 `.proto` 后重新生成:
 
   ```bash
@@ -35,25 +47,42 @@ pip install -r requirements.txt -r requirements-remote.txt
 ## 2. 启动
 
 ```bash
-python -m remote                          # WS 8765 + gRPC 50051, 只绑 127.0.0.1
-python -m remote --no-grpc                # 只要 WebSocket
+python -m remote                          # 三个传输全开: WS 8765 + gRPC 50051 + PeerJS
+python -m remote --no-peerjs              # 只要本机两个端口 (不连公开 broker)
+python -m remote --no-grpc                # WebSocket + PeerJS
 python -m remote --no-ws --no-grpc        # 只要 PeerJS (房间码配对, 不需要端口)
 python -m remote --ws-port 9000 --grpc-port 9001
-python -m remote --backend ffmpeg         # 指定截屏后端
-python -m remote --token secret           # 两个端口都要求 token
+python -m remote --room ABCD123           # 指定 PeerJS 房间码 (默认随机生成)
+python -m remote --token secret           # 三个传输都要求 token
 python -m remote --allow-remote --token secret   # 绑 0.0.0.0 (必须带 token)
-python -m remote --selftest               # 自检: 报告后端 + 抓一帧, 不动鼠标
+python -m remote --selftest               # 自检: 报告环境 + 抓一帧, 不动鼠标
 python -m remote --selftest --selftest-input     # 额外测一次鼠标移动(会动光标)
 ```
 
-启动后打印:
+**非 Windows 拒绝启动** (退出码 2, 与 `--allow-remote` 缺 token 的拒绝一致):
+
+```
+拒绝启动: 受控端只支持 Windows, 当前平台是 'linux'。
+
+  受控端 = 被操作的那台机器, 它必须原生跑在 Windows 上:
+      Windows 侧:  python -m remote        (或 start-win.bat)
+
+  要从 WSL / Linux / 手机侧操作它, 在那边只跑客户端, 连到 Windows 上的服务端:
+      python -m remote.client peerjs --peer kuuki-mouse-<房间码> info
+      ...
+```
+
+`--help` / `--version` 不受门禁影响, 照样能用。
+
+启动后打印 (三传输全开时的真实格式):
 
 ```
 kuuki remote 0.1.0 已启动
   WebSocket : ws://127.0.0.1:8765/
   gRPC      : 127.0.0.1:50051  (kuuki.remote.v1.RemoteControl)
+  PeerJS    : kuuki-mouse-ABCDE  (已注册, 0.peerjs.com:443 (公开 cloud broker))
   token     : 未设置 (仅回环安全)
-  截屏后端  : auto (auto = mss -> pillow -> ffmpeg 自动降级)
+  客户端示例: python -m remote.client ws ping
 ```
 
 ## 3. 命令行客户端 (调试用)
@@ -150,20 +179,25 @@ PeerJS 不是一个"端口", 而是两端各自连 broker、由 broker 牵线:
 **最常见的错误**: 在 A 机器起了服务, 却想让 B 机器"连自己" —— 那没有服务端。
 要在哪台机器上动鼠标键盘、截哪台机器的屏, **服务端就必须跑在那台机器上**。
 
-具体到本机的场景 (WSL + Windows):
+服务端**只能跑在 Windows 上** (见开头的定位说明), 所以"想控制谁"就只剩一个答案:
 
 | 想控制谁 | 服务端跑在哪 | 控制端跑在哪 |
 |---|---|---|
-| **Windows 桌面** | Windows (`start-win.bat --no-ws --no-grpc`) | WSL / 手机 / 任何地方 |
-| WSLg 的 X 屏幕 | WSL (但那个屏幕是空的, 见第 8 节) | — |
+| **Windows 桌面** | **必须**是 Windows (`start-win.bat --no-ws --no-grpc`) | WSL / Linux / 手机 / 任何地方 |
+
+控制端不挑平台 —— 它只发起出站连接, 不碰自己的桌面。
 
 ```bash
 # 被控端 (Windows): 只开 PeerJS, 打印房间码, 不需要任何端口
 start-win.bat --no-ws --no-grpc --room ABCDE
 
-# 控制端 (WSL / 异地 / 手机): 连过去
-python -m remote.client peerjs --peer kuuki-mouse-ABCDE --op mouse.position
+# 控制端 (WSL / Linux / 异地 / 手机): 连过去
+python -m remote.client peerjs --peer kuuki-mouse-ABCDE op mouse.position
 ```
+
+> 曾经的做法是"服务端跑在 WSL 里、去操作 Windows 桌面", 现在**不允许**了: 受控端限定
+> Windows, 而且那条路截到的也一直不是 Windows 桌面 (见第 8 节)。`remote/win/` 下那套
+> PowerShell 桥 (WSL → Windows) 仍在仓库里, 但**没有接入服务端**, 属实验性代码。
 
 **为什么这里不用管防火墙/端口**: WS 与 gRPC 绑 `127.0.0.1` 就出不了本机, 绑
 `0.0.0.0` 又要开防火墙、还要处理 WSL↔Windows 的网关地址; PeerJS 两端都只**出站**
@@ -264,61 +298,61 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `keyboard.check` *`check`/`keys`* | `keys` 或 `key` | **预检**键能不能发 (不按键) |
 | `kuuki` *`sensor`* | `message` | 老协议透传 |
 
-## 8. 截屏后端与已知限制
+## 8. 截屏实现与已知限制
 
-### 后端自动降级
+### 只有一个后端: `PIL.ImageGrab`
 
-`mss` → `Pillow.ImageGrab` → `ffmpeg -f x11grab`。选中的后端第一次抓图失败会被拉黑,
-自动换下一个; 可用性可以用 `info.capture_backends` 查。
+曾经有 `mss` → `Pillow` → `ffmpeg -f x11grab` 三级降级 + 失败拉黑, 实测只有一个跑得起来,
+另外两个纯属负担, 已整条删掉 —— 真跑不了就报错, 让人看见。
 
-**本机 (WSL2 / WSLg, `DISPLAY=:0`, 1680x1050) 实测**:
+同样不做的事还有屏幕尺寸探测: 曾经有 Xlib / xdpyinfo / `GetSystemMetrics` / 环境变量
+四套, 还会和截图实际尺寸对不上 (实测报 1920x1080 而截图是 1680x1050), 现在直接取截图
+本身的 `.size`, 一条路, 永远准。
 
-| 后端 | 结果 |
-|---|---|
-| `mss` | 未安装 |
-| `Pillow.ImageGrab` | ✗ `OSError: X get_image failed: error 8` (BadMatch) |
-| `python-xlib` 直接 `root.get_image()` | ✗ 同样 BadMatch |
-| `ffmpeg -f x11grab ... -f image2pipe -vcodec png -` | ✓ 可用, 约 240–320 ms/帧 (含进程启动) |
+所以 `info` 里**没有** `capture_backends` 字段了 (只有一个后端, 没什么可报);
+WS / gRPC 的截图响应里带 `"backend": "pillow"`。
 
-原因: WSLg 的 XWayland 不支持在 root window 上 `GetImage`; ffmpeg 走的是另一条路。
-所以在 WSLg 上默认生效的是 **ffmpeg** 后端。
+**2026-09-20 Windows 实测** (`.venv-win`, py3.10.7, 1680x1050): 整屏 PNG 约 322 KB,
+PNG 魔数正确; region 裁剪 + `max_width` 缩放 (320x200 区域 → 160x100) 正常。
+`info.clipboard_tool` 在 Windows 上命中 `clip`。
 
-### ⚠️ WSLg 截到的是"WSLg 的虚拟桌面", 不是 Windows 桌面
+### ⚠️ 中文 / emoji 用 `keyboard.paste`, 不要用 `keyboard.type`
 
-实测截图是 1680x1050 的 WSLg X 显示内容 (没有窗口时就是全黑), **不包含 Windows 桌面、
-Windows 应用窗口、Windows 上的光标**。想要截 Windows 桌面需要在 Windows 侧跑服务
-(那时 `Pillow.ImageGrab` 后端会直接可用), 或者改用 Windows 侧的截图方案。
+`keyboard.type` 是逐字符注入, 非 ASCII 不稳; 中文 / emoji 走 `keyboard.paste`
+(写剪贴板 + 发 `Ctrl+V`)。剪贴板工具探测顺序
+`wl-copy` → `xclip` → `xsel` → `pbcopy` → `clip`。
 
-`draw_cursor: true` 会把**X 侧光标位置**画成红色十字+圆圈 (截图本身通常不含光标)。
+### 历史实测: WSLg / X11 (不再支持, 仅作参考)
 
-### ⚠️ X11 键预检: 未映射的键会被拒绝, 不会挂死
+受控端限定 Windows 之前, 服务端在 WSL2 + WSLg 上跑过。当时的结论解释了为什么现在
+必须原生跑 Windows:
 
-`pynput` 遇到键盘映射里没有的键会走 "借键" 路径 (临时 `change_keyboard_mapping` 改布局)。
-在 WSLg 的 XWayland 上这**会把整条 X 连接打死**: 实测 `Key.f13` 抛
-`AttributeError: 'BadRRModeError' object has no attribute 'sequence_number'`,
-之后同一条连接上连 `esc` / `a` / `enter` 全部**永久阻塞** (换新进程则正常)。
+- **截到的不是 Windows 桌面**: 1680x1050 的 WSLg X 显示内容, 没有窗口时就是全黑,
+  **不包含 Windows 桌面 / Windows 应用窗口 / Windows 光标**。
+- `PIL.ImageGrab` 和 `python-xlib` 直连 `root.get_image()` 都在 root window 上失败
+  (`OSError: X get_image failed: error 8`, BadMatch) —— WSLg 的 XWayland 不支持
+  `GetImage`; 当时能用的是 `ffmpeg -f x11grab`, 约 240–320 ms/帧 (含进程启动)。
+- **X11 键预检**: pynput 遇到键盘映射里没有的键会走"借键"路径 (临时
+  `change_keyboard_mapping` 改布局), 在 WSLg 的 XWayland 上这会把整条 X 连接**打死** ——
+  实测 `Key.f13` 抛 `AttributeError: 'BadRRModeError' object has no attribute
+  'sequence_number'`, 之后同一条连接上连 `esc` / `a` / `enter` 都**永久阻塞**
+  (换新进程才正常)。当时的对策是按键前做纯查询式预检: 未映射的键 → 干净的
+  `bad_request`, 出错后重建键盘控制器; `keyboard.type` 会先整串预检, 只要有字符打不出来
+  就整体拒绝并提示改用 `keyboard.paste`。可以这样问一句:
 
-因此 `remote/input.py` 在按键前做纯查询式预检 (键解析不出 keysym, 或
-`keysym_to_keycode` 为 0 → 直接拒绝), 并保证:
+  ```bash
+  python -m remote.client ws op keyboard.check --args '{"keys":["a","enter","f1","f13","中"]}'
+  # f13 -> {"supported": false, "reason": "在当前 X 键盘映射里没有对应 keycode"}
+  # 中  -> {"supported": false, "reason": "不在当前 X 键盘映射里 ..."}
+  ```
 
-- 未映射的键 → 干净的 `bad_request`, 不进入 borrowing 路径;
-- 出错后自动重建键盘控制器 (换新 X 连接), 后续按键不受影响;
-- `keyboard.type` 会**先整串预检**: 只要有一个字符打不出来 (中文/emoji 最常见) 就整体拒绝,
-  并提示改用 `keyboard.paste`。
+  X11 下 pynput 也打不出中文 —— 这正是 `keyboard.paste` 存在的原因。
 
-动手前可以先 `keyboard.check` 问一下:
+这些分支 (`remote/input.py` 的 `_LINUX`、`remote/screen.py` 的 `xdisplay` 分支) 仍留在
+仓库里并标了「不再维护」, 但服务端在非 Windows 根本不会启动, 所以是**死代码**。
+`keyboard.check` 这个 op 本身还有用 (Windows 上恒为 supported), 保留。
 
-```bash
-python -m remote.client ws op keyboard.check --args '{"keys":["a","enter","f1","f13","中"]}'
-# f13 -> {"supported": false, "reason": "在当前 X 键盘映射里没有对应 keycode"}
-# 中  -> {"supported": false, "reason": "不在当前 X 键盘映射里 ..."}
-```
-
-### 中文/emoji 输入
-
-X11 下 pynput 打不出中文, 用 `keyboard.paste`: 写剪贴板 + 发 `Ctrl+V`。
-剪贴板工具探测顺序 `wl-copy` → `xclip` → `xsel` → `pbcopy` → `clip`
-(本机探测到 `wl-copy`)。`info.clipboard_tool` 可查。
+`draw_cursor: true` 会把光标位置画成红色十字+圆圈 (截图本身通常不含光标)。
 
 ## 9. 安全
 
@@ -330,20 +364,32 @@ X11 下 pynput 打不出中文, 用 `keyboard.paste`: 写剪贴板 + 发 `Ctrl+V
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 14 项
+python -m pytest test_remote.py -v      # 15 项
 python -m remote --selftest --selftest-input
 ```
 
-验证状态: **2026-09-19 在本机 (WSL2/WSLg, conda py3.12, `DISPLAY=:0`) 实测通过**。
+**2026-09-20 Windows 实测** (`.venv-win`, py3.10.7, 1680x1050):
 
-- `test_remote.py` 14 项全过 (键名解析 / 区域 / 编码 / 裁剪缩放 / 光标叠加 /
+- 受控端正常启动 (`python -m remote --no-grpc --no-peerjs --ws-port 8766`),
+  客户端 `python -m remote.client ws --url ws://127.0.0.1:8766 ping` 与同一命令换 `info`
+  端到端都通, `info` 报 `os=Windows` / `clipboard_tool=clip`。
+- 平台门禁: 伪装成非 Windows 时 `main()` 返回 2 并在 stderr 给出提示 (`--selftest` 同样被拦);
+  Windows 上 `--help` / `--version` 不受影响。
+- 真实抓屏: `PIL.ImageGrab` 1680x1050, PNG 魔数正确; region 裁剪 + 缩放正常。
+- 光标位置读取正常 (`mouse.position`); `keyboard.check` 在 Windows 上恒为 supported。
+
+> 跑整套测试前先 `pip install pytest` —— `.venv-win` 里没装, 所以上面这些结论是直测
+> 出来的, 不是 `pytest` 的汇总。
+
+**2026-09-19 本机 (WSL2/WSLg, conda py3.12, `DISPLAY=:0`) 实测通过** —— 该路径自受控端
+限定 Windows 起不再支持, 结论保留在第 8 节:
+
+- `test_remote.py` 当时 14 项全过 (键名解析 / 区域 / 编码 / 裁剪缩放 / 光标叠加 /
   服务调度 / 请求信封与 batch / kuuki 透传 / 键预检 / WS 帧编解码 / WS 端到端 /
   gRPC 端到端含流式与鉴权失败 / PeerJS 分块协议)。
-- 真实抓屏: ffmpeg 后端 1680x1050, PNG 魔数正确。
-- 真实鼠标: 移动到屏幕中心再回原位, 位置读数一致。
-- 真实键盘: 用 `pynput.keyboard.Listener` (XRecord) 抓 XTEST 注入事件,
-  `kuuki-remote` 逐字符全部到达, `enter` 与 `ctrl+shift+k` 到达。
-- 未实测: 多显示器 (本机只有一块虚拟屏)、Windows/macOS 后端、跨机网络调用。
+- 真实抓屏走 ffmpeg 后端; 真实键盘用 `pynput.keyboard.Listener` (XRecord) 抓 XTEST
+  注入事件验证 (`kuuki-remote` 逐字符到达, `enter` 与 `ctrl+shift+k` 到达)。
+- 未实测: 多显示器 (本机只有一块虚拟屏)、跨机网络调用。
 
 测试套件**不动鼠标键盘**; 会按键/移光标的验证都在 `--selftest-input` 与冒烟脚本里,
 需要显式开启。

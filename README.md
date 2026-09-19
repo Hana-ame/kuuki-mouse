@@ -21,10 +21,15 @@
   - **GitHub Pages** — 手机页面托管
 - 二维码内容 = `https://<你的用户名>.github.io/<仓库名>/#/<房间码>`, 手机扫码即配对。
 
-## 扩展: 本机远程控制 (remote/) — 鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输
+## 扩展: 本机远程控制 (remote/) — 鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输 (受控端仅 Windows)
 
 除空气鼠标之外, 本仓库还提供一个**本机电脑操作服务**: 用鼠标键盘操作这台机器、
 把屏幕截图取回来, 供 agent / 脚本 / 别的机器调用。**三种传输默认全开**:
+
+> **受控端只支持 Windows**。"受控端"指被操作的那台机器, 也就是下面这个服务本身 ——
+> 它必须**原生跑在 Windows 上**, 非 Windows 会在启动前被拒绝 (退出码 2, 提示里给可照做
+> 的命令)。WSL / Linux / 手机一侧只跑**客户端** (`python -m remote.client …`) 连过来就行,
+> 客户端不挑平台。
 
 | 传输 | 默认端点 | 适用场景 |
 |---|---|---|
@@ -48,8 +53,9 @@ python -m remote.client ws ping      # 命令行客户端
 - 默认只绑 `127.0.0.1`; 暴露到网络必须 `--allow-remote --token <随机值>`。
   PeerJS 走的是出站连接、不需要开放入站端口, 但同样建议带 token。
 
-完整协议、op 一览、截屏后端降级、PeerJS 分块传输与本机实测结论 (含 WSLg 的坑) 见
-[remote/README.md](remote/README.md)。
+完整协议、op 一览、PeerJS 分块传输、跨机部署位置与已知限制见
+[remote/README.md](remote/README.md) (里面另有一批 WSLg / X11 的历史实测结论 ——
+那条路径自受控端限定 Windows 起已不再作为支持目标, 保留仅作参考)。
 
 ## 快速开始
 
@@ -165,8 +171,9 @@ controller.py    鼠标控制 (pynput 封装)
 peerjs/          peerjs-python 的 fork (含 py3.12 兼容补丁, 见下)
 web/             手机页面 (GitHub Pages 发布内容, 即旧 www/ 的替代)
 test_attitude.py 姿态解算单元测试 (port of verify-attitude.mjs)
-remote/          本机远程控制扩展 (鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输)
-  ├─ screen.py     截屏后端 (mss / Pillow / ffmpeg x11grab) + 裁剪/缩放/编码
+remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输)
+  ├─ __main__.py   服务端入口 + 平台门禁 (非 Windows 拒绝启动, 退出码 2)
+  ├─ screen.py     截屏 (单一后端 PIL.ImageGrab) + 裁剪/缩放/编码
   ├─ input.py      输入控制 (扩展 controller.PynputMouseController)
   ├─ service.py    操作注册表 (op 调度, 三个传输共用)
   ├─ ws_server.py  WebSocket 服务端 (JSON + 二进制截屏帧 + 推流 + 鉴权)
@@ -174,11 +181,11 @@ remote/          本机远程控制扩展 (鼠标键盘 + 截屏, WS / gRPC / Pe
   ├─ peerjs_server.py / peerjs_client.py  PeerJS 传输 (被控端 / 控制端)
   ├─ ice.py        ICE 候选地址过滤 (自动排掉虚拟网卡)
   ├─ toast.py      被控端无焦点角标通知 (notify op)
-  ├─ win/          Windows 宿主 (host.py + winhost.ps1)
+  ├─ win/          WSL→Windows 实验桥 (host.py + winhost.ps1, 未接入服务端)
   ├─ client.py     命令行客户端
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
-test_remote.py   remote/ 扩展的测试 (13 项, 不动鼠标键盘)
+test_remote.py   remote/ 扩展的测试 (15 项, 不动鼠标键盘; 含平台门禁用例)
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机)

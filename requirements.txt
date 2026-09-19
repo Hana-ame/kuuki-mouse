@@ -27,3 +27,9 @@ av>=14.0
 pyee>=13
 dataclasses-json
 loguru
+# aiohttp: peerjs/api.py 顶层就 import 它 (broker 的 HTTP 信令走 ClientSession)。
+#   它是 fork 的**真依赖**, 但 aiortc 1.11+ 已经不再间接带上它, 所以必须自己写出来 ——
+#   之前漏了, 在干净环境里 pip install 完, 一开 PeerJS 传输就 ModuleNotFoundError。
+# PyYAML: peerjs/ext/http_proxy.py 顶层 import yaml。
+aiohttp>=3.9
+PyYAML>=6.0

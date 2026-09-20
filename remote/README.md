@@ -447,7 +447,7 @@ zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstalle
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 84 项 (含参数化; 15 项专测控制端, 13 项专测 PeerJS)
+python -m pytest test_remote.py -v      # 90 项 (含参数化; 15 项专测控制端, 13 项专测 PeerJS)
 python -m remote --selftest --selftest-input
 ```
 

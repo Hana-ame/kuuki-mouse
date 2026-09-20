@@ -122,6 +122,8 @@ python -m remote.client ws op keyboard.check --args '{"keys":["a","enter","f13",
 python -m remote.client ws windows --process msedge
 python -m remote.client ws focus --title "Gemini"   # 切前台 + 确认, 之后输入有确定归宿
 python -m remote.client ws screenshot /tmp/shot.png --max-width 1280 --draw-cursor
+python -m remote.client ws calibrate --max-width 1280 --save /tmp/calib.json
+python -m remote.client ws locate --saturated --calib /tmp/calib.json --max-width 1280
 python -m remote.client ws watch /tmp/frames --fps 2 --count 5 --format jpeg --max-width 1280
 python -m remote.client grpc info
 python -m remote.client grpc screenshot /tmp/shot.jpg --format jpeg --quality 70
@@ -170,11 +172,60 @@ python -m remote.client ws locate --diff-with before.png
 > **`scale` 靠帧头里的 `source_width` 算**, 而 `--max-width` 会把图缩小 —— 早先 WS
 > 的二进制帧头漏了 `source_width`, `scale` 恒等于 1.0, 于是定位出来的坐标全部偏掉
 > 一个缩放比。已修, 详见 `docs/knowledge/env-ws-frame-missing-source-width.md`。
+>
+> 不过**帧头里只有缩放, 没有平移**: 多显示器时虚拟桌面向左向下扩展, 图的原点未必
+> 是鼠标的 (0, 0), 而这个偏移量帧头里根本没有。乘算补不回来, 得实测 —— 见 3.1.2。
 
 > **纯视觉认不出「这是哪个窗口」**: 一排彩色小图标既可能是浏览器标签栏, 也可能是
-> 某个桌面应用的会话列表, 光看图像区分不了。要可靠地指定目标应用还得有
-> `window.list` / `window.focus` 这类 op, 目前没有 ——
-> 见 `docs/knowledge/gui-window-focus-gap.md`。
+> 某个桌面应用的会话列表, 光看图像区分不了 —— 2026-09-20 实战翻过车。现在有
+> `window.list` / `window.focus` 了, 先用标题与进程名锁定应用、切到前台, 再在窗口
+> 内部 locate (详见 `docs/knowledge/gui-window-focus-gap.md`)。
+
+### 3.1.2 `calibrate`: 把"图坐标 → 鼠标坐标"实测出来
+
+`locate` 报的 `screen` 默认是用帧头里的缩放系数**乘**出来的。乘算只能表达缩放,
+表达不了平移 —— 多显示器上虚拟桌面允许负坐标, 图的 (0, 0) 可能是鼠标的
+(-1920, 0), 每个点都该减去它。帧头里没这一项, 只能测。
+
+`calibrate` 不猜, 走闭环: 鼠标移到已知座标点 → 抓一帧并把光标画上去 → 帧差找出
+"这一屏哪儿变了" → 在变化区里认出那个红十字 → 拿一排这样的点对拟合出
+`screen = a × frame + b`。全程用的都是仓库里已有的东西 (`mouse.move` /
+`draw_cursor` / `vision.diff` / `vision.find_color`), 没有新依赖。
+
+```bash
+# 默认 3x3 = 9 个靶点; 会动鼠标, 跑完默认把光标挪回原位
+python -m remote.client ws calibrate
+
+# 顺带按 1280 宽缩放做, 并把 fit 存下来
+python -m remote.client ws calibrate --max-width 1280 --save /tmp/calib.json
+
+# 之后 locate 就用实测出来的换算 (缩放 + 平移), 不再只看帧头
+python -m remote.client ws locate --saturated --calib /tmp/calib.json --max-width 1280
+```
+
+报告的重点字段 (1680x1050 按 1280 宽跑的真实输出):
+
+```json
+{"ok": true, "requested": 9, "sampled": 9, "missed": [],
+ "declared_scale": 1.3125, "fit_scale": 1.3114, "scale_drift": 0.0008,
+ "origin": {"x": 0.481, "y": -0.656},
+ "residual": {"rmse": 0.3091, "max": 0.4371},
+ "verdict": "aligned", "outliers": [], "restored": true,
+ "advice": "图左上角对应鼠标坐标 (0.5, -0.7) —— 虚拟桌面有偏移, 只用 vision.scale_of
+            换算会整体偏这么多; 残差 0.44px <= 容差 2.0px, 这条换算可用。"}
+```
+
+四件事值得先知道:
+
+- **`verdict` 不是"命令跑成功了"**。认不出标记时它是 `too_few_samples`, 而且这时
+  **不给** `calibration` —— 宁可让你重跑, 也不给一个假的换算去用。
+- **`outliers` 是认错的标记**。屏幕上动的不止光标, 尺寸凑巧的红色 UI 会混进来:
+  本机实测一度 9 个点错 4 个, 直接拟合出的系数差了 19%。所以拟合走投票, 剔掉的
+  点连同误差列在这里供复查; 互相一致的点凑不够多数票时干脆报错。
+- **`restored` 为真才代表光标回去了**。校准必然动鼠标, 这是副作用。
+- **`origin` 是平移量**。单屏上接近 (0, 0), 多显示器上它才是校准的主要价值所在。
+
+详见 `docs/knowledge/gui-coordinate-calibration.md`。
 
 ### 3.2 `python -m remote.ctl` (多机控制级)
 
@@ -193,6 +244,7 @@ python -m remote.ctl pos self                   # 单发
 python -m remote.ctl shot out.png -a            # 多机自动插别名: out-self.png
 python -m remote.ctl watch frames -g local --fps 4 --count 10
 python -m remote.ctl move self 400 300 --duration .3
+python -m remote.ctl calibrate -g local --max-width 1280   # 每台各标定各的换算
 ```
 
 `op` / `check` / `shot` / `watch` / `tail` 这几个命令的目标要用 `-t/--to` / `-g` / `-a`
@@ -374,6 +426,7 @@ asyncio.run(main())
 |---|---|
 | `GetInfo` / `Ping` | 环境信息 / 连通性 |
 | `Screenshot(ScreenshotRequest) → Image` | 抓一帧, `data` 是图片字节 |
+| `Calibrate(CalibrateRequest) → CalibrateReply` | 实测图坐标↔鼠标坐标的换算 (见 3.1.2; reply 形状与 `screen.calibrate` 的 dict 逐字段对齐) |
 | `StreamScreenshots(StreamScreenshotsRequest) → stream Image` | **服务端流式推帧** (WS 侧要自己轮询) |
 | `GetMonitors` | 屏幕列表 |
 | `GetMousePosition` / `MoveMouse` / `MoveMouseRelative` | 光标 |
@@ -399,6 +452,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 |---|---|---|
 | `ping` | — | 连通性 + uptime |
 | `info` | — | 系统/屏幕/后端/剪贴板/能力清单 |
+| `screen.calibrate` *`calibrate`/`calib`* | `cols` `rows` `margin` `settle` `tolerance` `max_width` `restore` | **实测**图坐标↔鼠标坐标的换算 (`remote/calibrate.py`), 见 3.1.2。**会动鼠标**, 默认跑完挪回原位 |
 | `screen.size` *`size`* | — | 屏幕尺寸 |
 | `screen.monitors` *`monitors`* | — | 屏幕列表 (**尚未实现**, 见 `docs/puppet-multi-machine.md` 的待办) |
 | `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` | 抓一帧 |
@@ -529,8 +583,9 @@ zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstalle
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v   # 132 passed / 1 skipped
-                                     # 其中 29 项专测控制端, 16 项专测 PeerJS, 8 项专测 vision, 7 项专测窗口
+python -m pytest test_remote.py -v   # 144 passed / 1 skipped
+                                     # 其中 29 项专测控制端, 16 项专测 PeerJS, 6 项专测 vision,
+                                     # 7 项专测窗口, 12 项专测坐标校准
 python -m remote --selftest --selftest-input
 ```
 
@@ -549,15 +604,22 @@ python -m remote --selftest --selftest-input
 - **动作增强**: 多步滚动的总量守恒 (3 格 / 5 步 → 每步 1 格, 不丢余数)、
   路径点拖动整条只按一次松一次、组合键 `hold_ms`、`keyboard.hold` 长按 —— 全部用
   假鼠标/假键盘断言, 不碰真实光标与按键。
-- **三传输等价**: 15 个新动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
+- **三传输等价**: 14 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
   边界上也一致 —— `interval=0` / `duration=0` 这类"显式给 0"与"没给"能区分开
   (proto3 普通标量做不到, 相关字段已改成 `optional`)。窗口 op 另有 7 个用例
-  (打桩后端跨传输比对, 不动真桌面)。
+  (打桩后端跨传输比对, 不动真桌面), `screen.calibrate` 也在这 14 项里 ——
+  它的 proto reply 形状刻意做得与 service 返回的 dict 一致, 就是为了能逐字段比对。
 - **窗口 op + 端到端**: `window.list` 列出真实桌面窗口 (标题/进程/pid/Z 序),
   `window.focus` 在 Code 与 msedge 之间来回切换且 `focused` / `window.foreground`
   逐一吻合。用"focus 认窗口 → 点进提问框 → paste → 帧差否证 → 回车"的**纯 repo**
   流程向 Gemini 发出一条消息并收到回复 (`evidence/verify_window_fix.py`) ——
   此前同样流程因"不知道前台是谁"点进过错误的窗口。
+- **坐标校准**: `screen.calibrate` 在 1680x1050 单屏上按 `--max-width 1280` 跑,
+  9/9 靶点全部认对 —— `declared_scale` (帧头声明) 1.3125 与 `fit_scale` (实测)
+  1.3114 吻合, 残差 max 0.44px, `verdict=aligned`, `origin≈(0.5, -0.7)` (单屏本就
+  没有平移, 多显示器上这一项才是它存在的理由)。三个坑已在模块里堵掉: 前后帧都画
+  光标会让帧差出现两个合法候选、动态 UI 里凑巧的红色方块会被当成标记 (本机一度
+  9 错 4, 拟合出的系数差 19%)、贴边的标记被裁一半导致重心内偏。
 
 > `.venv-win` 里现在装了 pytest (9.1.1)。装的时候若 pip 报连不上
 > `127.0.0.1:10809`, 那是系统代理变量指到了一个没在跑的代理, 加

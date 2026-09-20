@@ -63,6 +63,7 @@ controller (本机)
 | `window.list` | 列出顶层窗口（标题/进程名过滤，按 Z 序）。**仅 Windows 受控端** | title, process, limit, include_hidden |
 | `window.foreground` | 当前前台是谁（跑点击流程前先问一句） | — |
 | `window.focus` | 把窗口切到前台**并确认**（focused 是确认结果，不是"调用成功"） | hwnd 或 title/process + index, wait |
+| `screen.calibrate` | **实测**图坐标↔鼠标坐标的换算（会动鼠标，跑完默认挪回原位） | cols, rows, margin, settle, tolerance, max_width, restore |
 
 **向后兼容**：`scroll` 不传 steps 即单步（原行为）；`drag` 不传 points 仍认 x1/y1/x2/y2（两点 = points 两元素）；老协议 `{"t":"scroll","delta":N}` 仍被识别。
 
@@ -135,7 +136,7 @@ python -m remote.ctl tail  frames -t pc1                  # 一直抓到 Ctrl-C
   「文件锁不跨线程」「`os.replace` 目标被占用会 WinError 5」「tmp 名撞 pid」三个坑，见
   [ctl-selfhost-runbook.md](ctl-selfhost-runbook.md) 第 4.5 节。
 - **没有真设备也能验多机**：`python -m remote.dummy --count 3` 起一批仿真受控端（各自的屏幕/延迟/
-  操作日志，可单独注入故障），registry 直接由它生成。132 项测试里有 9 项在跑这套。
+  操作日志，可单独注入故障），registry 直接由它生成。144 项测试里有 9 项在跑这套。
 - **PeerJS 不必"等有外网再说"**：16 项回环测试跑的是与真机相同的代码路径，另有
   `python -m remote.peerjs_selftest` 连公开 broker 做真机自检（注册 2s / 握手 13s /
   192KB 截图分块传送逐字节相同）。逐环节分析与修掉的 9 个问题见
@@ -184,18 +185,21 @@ python -m remote.ctl tail  frames -t pc1                  # 一直抓到 Ctrl-C
 | agent 机防火墙挡入站 | 局域网模式加放行规则；公网模式走 PeerJS（无入站）或隧道 |
 | 组合键/拖动误操作真实窗口 | 演示类操作先无焦点 toast 通知；验收只对自建靶页 |
 | 中文输入被 IME 吃掉 | 一律 `keyboard.paste`，不逐字符 type |
-| 多显示器坐标错位 | `screen.size` 取主屏；region 参数显式指定；后续加 monitor 枚举 op |
+| 多显示器坐标错位 | `screen.size` 取主屏；region 参数显式指定；**协同的第一步先跑 `screen.calibrate`** —— 多显示器上虚拟桌面原点可能是 (-1920, 0)，这个平移量帧头里没有，只有实测补得回来 |
 
 ## 9. 本机已有可复用资产
 
 - `remote/` 三传输 + op 注册表（2026-09-19 跨机 WS 实测：`ping` 通、1680×1050 截图 132ms；agent 侧现在只允许 Windows）
 - `remote/input.py` 完整动作集（2026-09-20：多步滚动 / 路径点拖动 / combo 的 `hold_ms` / `hold` 长按），
-  `test_remote.py` 132 项测试覆盖（含跨传输等价用例、控制端用例、PeerJS 回环用例、vision 定位与窗口用例），全部用假鼠标键盘断言
+  `test_remote.py` 144 项测试覆盖（含跨传输等价用例、控制端用例、PeerJS 回环用例、vision 定位、窗口与坐标校准用例），全部用假鼠标键盘断言
 - `remote/client.py` 的 `WsClient` / `GrpcClient` / `PeerJsClient`：P3 的分发层直接复用它，不用新写传输
-- `remote/ctl.py`（2026-09-20）：多机控制端 —— registry + 目标解析 + 并发分发 + 结果汇总，测试 132 项里的 29 项专测它
+- `remote/ctl.py`（2026-09-20）：多机控制端 —— registry + 目标解析 + 并发分发 + 结果汇总，测试 144 项里的 29 项专测它
 - `remote/vision.py`（2026-09-20）：纯 Pillow 视觉定位 —— 颜色找块 / 模板匹配 /
   帧差 / 网格概览 / 主色，给 `remote.client` 的 `locate` 子命令用（见
-  `remote/README.md` 3.1.1），测试 132 项里的 8 项
+  `remote/README.md` 3.1.1），测试 144 项里的 6 项
+- `remote/calibrate.py`（2026-09-20）：纯 Pillow 坐标校准 —— 闭环实测"图坐标↔鼠标坐标"
+  的缩放**与平移**（帧头里只有缩放），给 `remote.client` 的 `calibrate` 子命令用
+  （见 `remote/README.md` 3.1.2），测试 144 项里的 12 项
 - `remote/peerjs_selftest.py`（2026-09-20）：PeerJS 真机自检入口（连公开 broker，假屏幕假输入）
 - 三条踩过的坑已固化：`op` / `check` / `shot` 等命令的目标必须走 `-t/-g/-a`（位置参数互相吞）；测试里起 WS 服务端必须在**同一个协程**里跑完（`asyncio.run` 一结束就关 socket）；gRPC 的 `Ack{ok, message}` 里塞的是 JSON 字符串，客户端要拆回对象才能与 WS 的返回值比（`remote/client.py::_unwrap_ack`）
 - `click.html` + `p2p_clicktarget.py`：点击自验证靶（`_clicks.jsonl`）

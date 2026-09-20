@@ -61,7 +61,7 @@
 | 命令 | 实测结果 |
 |---|---|
 | `ping -a` | 两台 OK，约 93ms / 181ms，返回值字段一致（`pong/ts/uptime_s/version`） |
-| `info -a` | 返回 `DESKTOP-LLULJ2Q` / Windows / 1680×1050 / `clipboard_tool: clip` / 46 条 capabilities |
+| `info -a` | 返回 `DESKTOP-LLULJ2Q` / Windows / 1680×1050 / `clipboard_tool: clip` / 55 条 capabilities（handlers 26 + 别名 29；窗口三 op 与 `screen.calibrate` 进来之前是 46） |
 | `pos -g local` | 两台都读到同一根真实光标 `(1046, 551)` |
 | `check -g local ctrl shift f5` | 三条全 `supported: true` |
 | `shot shot.png -a` | 两张 ~149 KB PNG，自动改名 `shot-self.png` / `shot-self-grpc.png` |

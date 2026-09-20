@@ -97,6 +97,7 @@
 *用这套工具真实操控桌面的可行套路*
 
 - [中文输入走剪贴板 + Ctrl+V，不要用逐字注入](gui-chinese-input-via-clipboard.md)
+- [calibrate: 别相信缩放系数, 把它测出来](gui-coordinate-calibration.md)
 - [GUI 自动化的可靠套路：截图闭环](gui-screenshot-loop-and-coordinate-scale.md)
 - [真人正在用这台电脑时，注入会互相干扰](gui-user-interference.md)
 - [remote/vision: 让"看"也归属 repo 的定位模块](gui-vision-locate-module.md)
@@ -111,6 +112,7 @@
 - [后台进程与端口：三个反复踩的坑](env-background-process-and-port.md)
 - [Git Bash / Windows 侧的零碎坑](env-bash-path-and-shell-quirks.md)
 - [HTTPS push 会永久卡死，push 走 SSH](env-git-push-ssh.md)
+- [本机特有的两个输入坑 (逐字输入被吞 / alt+space 被抢)](env-local-machine-input-quirks.md)
 - [WS 二进制帧头漏了 source_width, 缩放系数算出来永远是 1.0](env-ws-frame-missing-source-width.md)
 
 ## 未修 / 未做清单
@@ -121,4 +123,4 @@
 
 ---
 
-共 **60 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **62 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

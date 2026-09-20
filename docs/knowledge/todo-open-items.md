@@ -25,6 +25,9 @@
 
 - **PeerJS 跨 NAT**（本机只有一台；同机 WebRTC 走 host 候选，跨网才真需要 STUN）
 - 弱网 / 重连：现在的行为是超时后标 offline，**不重试**
+- **多显示器上的坐标校准**：`screen.calibrate` 只在单屏上验过（1680×1050，残差
+  0.44px）。它的主要价值 —— 那个帧头里没有的**平移量** `origin` —— 只有多显示器
+  （虚拟桌面原点可能是 (-1920, 0)）才体现得出来，本机没这个条件验
 - 分发相关：**代码签名**（SmartScreen 会拦未签名 exe）、**体积精简**（av 编解码器没挑过）
 
 ## 三传输其实不等价 —— 2026-09-20 全 op 核对的结果
@@ -46,10 +49,12 @@
 两个翻译层都要跟」这条约定（《为自己写》见 `arch-one-impl-three-transports.md`）目前只对
 鼠标键盘那部分成立。
 
-**加完 op 要动的四处**：`service.py` 的 handlers/aliases → proto + 重新
-`bash remote/proto/gen_proto.sh` → `grpc_server.py` 的映射 → `client.py` 的构造。
+**加完 op 要动的五处**：`service.py` 的 handlers/aliases → proto + 重新
+`bash remote/proto/gen_proto.sh` → `grpc_server.py` 的映射 → `client.py` 的构造与
+子命令 → `ctl.py` 的命令翻译。
 少一处就静默少一条传输，跑
 `test_remote.py::test_new_ops_agree_across_transports` 也发现不了 —— 它只测表里已有的 op。
+（`screen.calibrate` 是 2026-09-20 加的，五处一开始就都跟上了，所以它没进上面那张表。）
 
 ## 小瑕疵
 

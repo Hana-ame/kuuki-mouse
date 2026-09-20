@@ -81,9 +81,16 @@ kuuki remote 0.1.0 已启动
   WebSocket : ws://127.0.0.1:8765/
   gRPC      : 127.0.0.1:50051  (kuuki.remote.v1.RemoteControl)
   PeerJS    : kuuki-mouse-ABCDE  (已注册, 0.peerjs.com:443 (公开 cloud broker))
-  token     : 未设置 (仅回环安全)
+  token     : 未设置 —— PeerJS 经公开 broker 配对, 知道房间码的人都能控这台机器
+              不可信网络下请先加 --token <口令> (手机端配对时要填同一个)
   客户端示例: python -m remote.client ws ping
 ```
+
+> **"仅回环安全"这个说法只在关掉 PeerJS 时才成立。** PeerJS 是本机主动连出去注册到
+> 公开 broker 的，别人拿到房间码就能连进来 —— 和本地绑 `127.0.0.1` 还是 `0.0.0.0`
+> 没有关系。房间码 31⁵ ≈ 2860 万种，够挡误撞，挡不住有意枚举：它是配对用的，不是凭证。
+> 只在可信网络里裸奔；不确定就加 `--token`（手机端配对区填同一个值，或把
+> `#/<房间码>?token=<口令>` 做成二维码）。
 
 ## 3. 控制端: 命令行客户端 + 多机控制器
 

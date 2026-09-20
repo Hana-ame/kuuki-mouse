@@ -147,6 +147,9 @@ jobs:
             sleep 1
           done
           cat agent_e2e.log
+          # 没设 token 时的安全提示要随传输变: 关掉 PeerJS 才是"仅回环安全",
+          # 开着 PeerJS 就得警告房间码经公开 broker 可配对。别让这句退化成一句套话
+          grep -q '仅回环安全' agent_e2e.log
 
           python -m remote.client ws --url ws://127.0.0.1:18765 ping | tee ws_ping.json
           grep -q '"pong": true' ws_ping.json

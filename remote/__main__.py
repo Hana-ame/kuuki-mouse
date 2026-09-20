@@ -225,7 +225,17 @@ async def run_servers(args: argparse.Namespace) -> int:
             else:
                 state = "已注册" if endpoint["ready"] else "未注册"
                 print(f"  PeerJS    : {endpoint['peer_id']}  ({state}, {endpoint['broker']})")
-        print(f"  token     : {'已设置' if token else '未设置 (仅回环安全)'}")
+        # 没设 token 时的提示要分情况: "仅回环安全" 只在**没有 PeerJS** 时才成立。
+        # PeerJS 是这台机器主动连出去注册到公开 broker 的 —— 别人知道房间码就能连进来,
+        # 跟本地绑的是 127.0.0.1 还是 0.0.0.0 完全无关。房间码 31^5 ≈ 2860 万种,
+        # 挡不住有心的枚举, 它只是配对用的, 不是凭证。
+        if token:
+            print("  token     : 已设置")
+        elif peerjs_server is not None:
+            print("  token     : 未设置 —— PeerJS 经公开 broker 配对, 知道房间码的人都能控这台机器")
+            print("              不可信网络下请先加 --token <口令> (手机端配对时要填同一个)")
+        else:
+            print("  token     : 未设置 (仅回环安全)")
         print("  客户端示例: python -m remote.client ws ping")
         sys.stdout.flush()
 

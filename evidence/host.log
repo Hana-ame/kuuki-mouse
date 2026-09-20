@@ -1,0 +1,8 @@
+2026-09-20 19:58:13,529 INFO websockets.server: server listening on 127.0.0.1:8765
+2026-09-20 19:58:13,529 INFO kuuki.remote.ws: WebSocket 服务已启动: ws://127.0.0.1:8765
+2026-09-20 19:58:13,621 INFO kuuki.remote.grpc: gRPC 服务已启动: 127.0.0.1:50051
+kuuki remote 0.1.0 已启动
+  WebSocket : ws://127.0.0.1:8765/
+  gRPC      : 127.0.0.1:50051  (kuuki.remote.v1.RemoteControl)
+  token     : 未设置 (仅回环安全)
+  客户端示例: python -m remote.client ws ping

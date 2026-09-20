@@ -1,0 +1,33 @@
+[
+  "无标题 - 记事本",
+  {
+    "ok": true,
+    "button": "left",
+    "clicks": 1,
+    "hold": 0.06,
+    "positioned_at": {
+      "x": 840,
+      "y": 420
+    }
+  },
+  {
+    "ok": true,
+    "chars": 11
+  },
+  {
+    "ok": true,
+    "chars": 17,
+    "clipboard_tool": "win32",
+    "hotkey": "ctrl+v"
+  },
+  {
+    "width": 1280,
+    "height": 800,
+    "bytes": 126935,
+    "path": "D:\\WorkPlace\\kuuki-mouse\\evidence\\cjk-paste-evidence.png",
+    "backend": "pillow"
+  },
+  {
+    "前台现在是": "WorkBuddy"
+  }
+]

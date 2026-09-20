@@ -149,13 +149,19 @@ jobs:
       - name: 端到端 —— 源码客户端真连一次打包后的 WS / gRPC
         # PeerJS 之外的两个传输, 打包后也得真连上才算数: 起 exe, 用源码 client 打过去。
         # 只走 127.0.0.1, 不依赖外网和桌面, 所以这条是**阻塞**的。
-        # 端口刻意避开默认的 8765/50051, 免得和 runner 上别的东西撞。
+        # 端口**随机且避开默认**: 默认的 8765/50051 会撞 runner 上别的东西;
+        # 写死一个固定端口也有坑 —— 连着 push 两个 commit 时 GitHub 会把两个 run
+        # 同时起 (实测 #45/#46 是同一秒 run_started_at, concurrency 没拦住),
+        # 后起的那个 exe 绑不上端口, 端到端就假红一次。
         shell: bash
         run: |
           # -e 必须有: 缺了它, 中间任何断言失败都会被吞掉, 只有最后一条命令说了算
           set -euo pipefail
           EXE=dist/kuuki-agent/kuuki-agent.exe
-          "$EXE" --ws --grpc --ws-port 18765 --grpc-port 50052 > agent_e2e.log 2>&1 &
+          WS_PORT=$(( 18000 + RANDOM % 8000 ))
+          GRPC_PORT=$(( WS_PORT + 1 ))
+          echo "端口: ws=$WS_PORT grpc=$GRPC_PORT"
+          "$EXE" --ws --grpc --ws-port "$WS_PORT" --grpc-port "$GRPC_PORT" > agent_e2e.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
           for i in $(seq 1 30); do
@@ -167,13 +173,13 @@ jobs:
           # 开着 PeerJS 就得警告房间码经公开 broker 可配对。别让这句退化成一句套话
           grep -q '仅回环安全' agent_e2e.log
 
-          python -m remote.client ws --url ws://127.0.0.1:18765 ping | tee ws_ping.json
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT ping | tee ws_ping.json
           grep -q '"pong": true' ws_ping.json
-          python -m remote.client ws --url ws://127.0.0.1:18765 screenshot ws_shot.png > /dev/null
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT screenshot ws_shot.png > /dev/null
 
-          python -m remote.client grpc --target 127.0.0.1:50052 ping | tee grpc_ping.json
+          python -m remote.client grpc --target 127.0.0.1:$GRPC_PORT ping | tee grpc_ping.json
           grep -q '"pong": true' grpc_ping.json
-          python -m remote.client grpc --target 127.0.0.1:50052 screenshot grpc_shot.png > /dev/null
+          python -m remote.client grpc --target 127.0.0.1:$GRPC_PORT screenshot grpc_shot.png > /dev/null
 
           # 截图真落盘才算通: WS 那条走二进制帧, gRPC 那条走 protobuf 的 bytes 字段,
           # 两条路不一样, 都得验
@@ -184,10 +190,10 @@ jobs:
           # 多显示器那一路也要在打包后的 exe 上跑通: monitors 枚举 (ctypes) 与
           # "抓第 0 块屏" 都是新增代码路径, 源码侧有单元测试 (打桩), 这里验的是
           # 打进 exe 之后 EnumDisplayMonitors 还调得动。
-          python -m remote.client ws --url ws://127.0.0.1:18765 \
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT \
             op screen.monitors --args '{}' | tee monitors.json
           grep -q '"count"' monitors.json
-          python -m remote.client ws --url ws://127.0.0.1:18765 screenshot ws_monitor0.png --monitor 0
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT screenshot ws_monitor0.png --monitor 0
           ls -l ws_monitor0.png
           test -s ws_monitor0.png
 
@@ -195,7 +201,7 @@ jobs:
           # 扫码后真正在用的路。它要 `from app import handle_message`, 而 app.py
           # 顶层就 `app = App()` (含 pynput 控制器), 打进 exe 后能不能起来没人验过。
           # 用一个未知 t 的探针: 不产生任何输入, 但能证明模块加载 + 路由都活着。
-          python -m remote.client ws --url ws://127.0.0.1:18765 \
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT \
             op kuuki --args '{"message":{"t":"__probe__"}}' | tee kuuki_probe.json
           grep -q '"handled": false' kuuki_probe.json
           echo "端到端通过: WS / gRPC / kuuki 老协议透传 三条路都通"

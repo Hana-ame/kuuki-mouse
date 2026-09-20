@@ -67,6 +67,7 @@
 
 - [判断模块有没有打进包，要看 PYZ toc](ci-check-module-in-pyz-toc.md)
 - [同一段防御代码抄到第三份时，就该抽出来](ci-dedupe-defensive-code.md)
+- [CI 端到端要用随机端口 —— 连着 push 时两个 run 会同时起](ci-e2e-ports-must-be-random.md)
 - [`requirements.txt` 曾缺 aiohttp（任何新环境一开 PeerJS 就崩）](ci-missing-aiohttp-dep.md)
 - [PyInstaller：onedir + 路径基准](ci-pyinstaller-spec-gotchas.md)
 - [CI shell 步骤：`set -uo pipefail` 缺了 `-e` 等于没有断言](ci-shell-step-pitfalls.md)
@@ -128,4 +129,4 @@
 
 ---
 
-共 **67 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **68 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

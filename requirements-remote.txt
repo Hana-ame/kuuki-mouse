@@ -4,6 +4,12 @@
 #   - requirements.txt 里的 pynput / Pillow 已经覆盖了输入控制与图片编码, 不用重复装
 #   - websockets 原本只是 peerjs fork 的隐式依赖, 这里显式写出来
 #
+# 哪些是必需的, 取决于开哪几个传输 (2026-09-20 起按需开启, 默认只开 PeerJS):
+#   - websockets  : 默认就要 —— peerjs/socket.py 顶层 import 它去连 broker,
+#                   remote/ws_server.py 也用它起服务 (开了 --ws 更是必需)
+#   - grpcio/protobuf : **只有 --grpc 才需要**。remote/grpc_server.py 是惰性导入的,
+#                   只开 PeerJS / 只开 WS 时压根 import 不到, 没装也能正常起服务
+#
 # 安装: pip install -r requirements.txt -r requirements-remote.txt
 #
 # 版本下限的依据 (2026-09-20):

@@ -862,6 +862,21 @@ def build_parser() -> argparse.ArgumentParser:
     # 同上: check 的键名是 "一坨位置参数", 会和别名列表分不清, 目标只走 -t/-g/-a
     check = _add_action(sub, "check", "键支持性预检 (不真按)", positional_targets=False)
     check.add_argument("keys", nargs="+")
+
+    # 窗口: 多机编排里"先认窗口, 再在窗口里定位"同样成立。只有 Windows 受控端
+    # 实现 (remote/window.py); 别的平台会回 unsupported, ctl 照常把它显示出来。
+    windows = _add_action(sub, "windows", "列出受控端顶层窗口")
+    windows.add_argument("--title", default="", help="标题子串过滤")
+    windows.add_argument("--process", default="", help="进程名或 pid 子串")
+    windows.add_argument("--limit", type=int, default=0, help="最多列几个 (0 = 不限)")
+    windows.add_argument("--include-hidden", action="store_true")
+
+    focus = _add_action(sub, "focus", "把受控端某个窗口切到前台")
+    focus.add_argument("--hwnd", type=int, default=None, help="窗口句柄 (最可靠)")
+    focus.add_argument("--title", default="", help="标题子串")
+    focus.add_argument("--process", default="", help="进程名或 pid 子串")
+    focus.add_argument("--index", type=int, default=0, help="命中多个时取第几个")
+    focus.add_argument("--wait", type=float, default=None, help="切换后最多等多久确认")
     return parser
 
 
@@ -969,6 +984,24 @@ def _machine_op(args: argparse.Namespace) -> Tuple[str, dict]:
         return "keyboard.hold", {"key": args.key, "ms": args.ms}
     if command == "check":
         return "keyboard.check", {"keys": args.keys}
+    if command == "windows":
+        return "window.list", {
+            "title": args.title,
+            "process": args.process,
+            "limit": args.limit,
+            "include_hidden": args.include_hidden,
+        }
+    if command == "focus":
+        payload: Dict[str, Any] = {"title": args.title, "process": args.process}
+        if args.hwnd is not None:
+            payload["hwnd"] = int(args.hwnd)
+        payload["index"] = int(args.index or 0)
+        # --wait 没给就别填 0: 0 表示"不等待确认", 而缺省是服务端默认的轮询
+        if args.wait is not None:
+            payload["wait"] = float(args.wait)
+        if not payload["title"] and not payload["process"] and "hwnd" not in payload:
+            raise ValueError("focus 需要 --hwnd / --title / --process 之一")
+        return "window.focus", payload
     raise ValueError(f"未知命令 {command!r}")
 
 

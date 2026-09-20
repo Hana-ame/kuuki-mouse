@@ -13,13 +13,13 @@
 > 被 strip 成空串后误报"键名不能为空"（见 `protocol-key-whitespace.md`）、
 > `Capture.to_dict()` 漏 `backend` 字段（JSON 通道与二进制帧头不一致）、
 > WS 二进制帧头漏 `source_width`（见 `env-ws-frame-missing-source-width.md`）。
+> 同日也补上了 `notify` 的 gRPC RPC 与 **window 类 op**
+> （`window.list` / `window.foreground` / `window.focus`，见 `gui-window-ops-module.md`）。
 
 ## 未做的能力
 
-- **window 类 op**（`window.list` / `window.focus` / `window.title`）—— 纯视觉
-  定位无法区分"长得像"的应用窗口，2026-09-20 已实战翻车：前台是 WorkBuddy，
-  视觉脚本把它的会话标签栏当成了浏览器标签栏（见 `gui-window-focus-gap.md`）
 - **OCR / 文字识别** —— 视觉能定位"这里有个框"，认不出框里写的是什么
+  （window 类 op 已补：`gui-window-ops-module.md`）
 
 ## 未做的验证
 
@@ -33,9 +33,13 @@
 
 | op / 能力 | WS | gRPC | PeerJS |
 |---|---|---|---|
-| `notify`（别名 `popup`，`remote/toast.py` 角标通知） | ✅ | ❌ **没有对应 RPC** | ✅ |
 | `screen.grab` / `screen.watch` / `screen.unwatch` | ✅ | ❌（推流走 `StreamScreenshots` 服务端流式，不是 op） | ❌ |
 | `mouse.click` 的 `hold` 参数 | ✅ | ❌ proto 里没这个字段 | ✅ |
+
+> 2026-09-20 更新: 表里原有第三行 `notify` 已修 —— `grpc_server.py` 补了 `Notify`
+> RPC, 三传输等价了。剩下两行仍在。window 三个 op 是**补 op 时就三条传输一起加的**
+> (`ListWindows` / `GetForegroundWindow` / `FocusWindow`), 等价性由
+> `test_window_ops_agree_across_transports` 保证。
 
 根因都一样：`ws_server` / `peerjs_server` 是把 op 名**直接透传给** `service.handle`，
 而 `grpc_server` 是**一张 op→RPC 的手写映射表** —— 表上没写的就用不了。所以「加了新 op

@@ -136,6 +136,26 @@ class RemoteControlStub:
                 request_serializer=kuuki__remote__pb2.KeyCheckRequest.SerializeToString,
                 response_deserializer=kuuki__remote__pb2.KeyCheckReply.FromString,
                 _registered_method=True)
+        self.ListWindows = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/ListWindows',
+                request_serializer=kuuki__remote__pb2.ListWindowsRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.ListWindowsReply.FromString,
+                _registered_method=True)
+        self.GetForegroundWindow = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/GetForegroundWindow',
+                request_serializer=kuuki__remote__pb2.Empty.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.WindowInfo.FromString,
+                _registered_method=True)
+        self.FocusWindow = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/FocusWindow',
+                request_serializer=kuuki__remote__pb2.FocusWindowRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.FocusWindowReply.FromString,
+                _registered_method=True)
+        self.Notify = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/Notify',
+                request_serializer=kuuki__remote__pb2.NotifyRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.Ack.FromString,
+                _registered_method=True)
         self.SendKuukiMessage = channel.unary_unary(
                 '/kuuki.remote.v1.RemoteControl/SendKuukiMessage',
                 request_serializer=kuuki__remote__pb2.KuukiMessageRequest.SerializeToString,
@@ -273,6 +293,32 @@ class RemoteControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ListWindows(self, request, context):
+        """窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetForegroundWindow(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FocusWindow(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def Notify(self, request, context):
+        """被控端无焦点角标 (只通知, 不抢前台)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SendKuukiMessage(self, request, context):
         """空气鼠标老协议透传 (姿态数据 / 鼠标键 / 文本)
         """
@@ -382,6 +428,26 @@ def add_RemoteControlServicer_to_server(servicer, server):
                     servicer.CheckKeys,
                     request_deserializer=kuuki__remote__pb2.KeyCheckRequest.FromString,
                     response_serializer=kuuki__remote__pb2.KeyCheckReply.SerializeToString,
+            ),
+            'ListWindows': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListWindows,
+                    request_deserializer=kuuki__remote__pb2.ListWindowsRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.ListWindowsReply.SerializeToString,
+            ),
+            'GetForegroundWindow': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetForegroundWindow,
+                    request_deserializer=kuuki__remote__pb2.Empty.FromString,
+                    response_serializer=kuuki__remote__pb2.WindowInfo.SerializeToString,
+            ),
+            'FocusWindow': grpc.unary_unary_rpc_method_handler(
+                    servicer.FocusWindow,
+                    request_deserializer=kuuki__remote__pb2.FocusWindowRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.FocusWindowReply.SerializeToString,
+            ),
+            'Notify': grpc.unary_unary_rpc_method_handler(
+                    servicer.Notify,
+                    request_deserializer=kuuki__remote__pb2.NotifyRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.Ack.SerializeToString,
             ),
             'SendKuukiMessage': grpc.unary_unary_rpc_method_handler(
                     servicer.SendKuukiMessage,
@@ -931,6 +997,114 @@ class RemoteControl:
             '/kuuki.remote.v1.RemoteControl/CheckKeys',
             kuuki__remote__pb2.KeyCheckRequest.SerializeToString,
             kuuki__remote__pb2.KeyCheckReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListWindows(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/ListWindows',
+            kuuki__remote__pb2.ListWindowsRequest.SerializeToString,
+            kuuki__remote__pb2.ListWindowsReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetForegroundWindow(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/GetForegroundWindow',
+            kuuki__remote__pb2.Empty.SerializeToString,
+            kuuki__remote__pb2.WindowInfo.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FocusWindow(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/FocusWindow',
+            kuuki__remote__pb2.FocusWindowRequest.SerializeToString,
+            kuuki__remote__pb2.FocusWindowReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Notify(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/Notify',
+            kuuki__remote__pb2.NotifyRequest.SerializeToString,
+            kuuki__remote__pb2.Ack.FromString,
             options,
             channel_credentials,
             insecure,

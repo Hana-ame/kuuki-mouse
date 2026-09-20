@@ -187,6 +187,69 @@ message KeyCheckReply {
   repeated KeyCheckResult keys = 1;
 }
 
+// ---------------------------------------------------------------- 窗口
+//
+// 视觉定位 (locate) 只能说"屏幕上有个像输入框的东西", 说不出它属于哪个应用。
+// 这一组 RPC 让调用方先用标题/进程名认窗口、把它切到前台, 再在窗口内部定位。
+// 目前只有 Windows 受控端实现 (remote/window.py, 纯 ctypes)。
+
+message WindowInfo {
+  // 字段名与类型都跟着 service 的 dict 走:
+  // - 叫 ``hwnd`` 而不是 ``handle`` —— 控制端会把 protobuf 转成 dict 与 WS 的
+  //   结果互相比较, 键名不一致就等于结果不一致;
+  // - 用 uint32 而不是 uint64 —— protobuf 的 JSON 映射把 64 位整数转成**字符串**,
+  //   那样 gRPC 侧拿到 "1234"、WS 侧拿到 1234, 两边对不上。HWND 实际取值远小于
+  //   2^32, 32 位装得下。
+  uint32 hwnd = 1;         // HWND; window.focus 可以直接用它 (最可靠)
+  string title = 2;
+  string process = 3;      // 进程名, 不含路径与 .exe (例如 msedge)
+  uint32 pid = 4;
+  Rect rect = 5;
+  bool visible = 6;
+  bool minimized = 7;
+  bool foreground = 8;     // 是不是当前前台窗口
+}
+
+message ListWindowsRequest {
+  string title = 1;        // 标题子串 (不区分大小写)
+  string process = 2;      // 进程名或 pid 子串, 例如 "msedge"
+  int32 limit = 3;         // 0 = 不限
+  bool include_hidden = 4; // 把隐藏的 / 被 DWM 隐藏的也算进来 (调试用)
+}
+
+message ListWindowsReply {
+  repeated WindowInfo windows = 1;
+  int32 count = 2;
+}
+
+message FocusWindowRequest {
+  uint32 hwnd = 1;         // 直接给 HWND; 给了它就不再按标题找
+  string title = 2;
+  string process = 3;
+  int32 index = 4;         // 命中多个时取第几个 (按 Z 序)
+  optional double wait = 5;  // 切换后最多等多久确认前台 (秒; 缺省 0.5, 显式 0 = 不等)
+}
+
+message FocusWindowReply {
+  bool focused = 1;        // 确认之后前台是不是它 —— 不是"调用成功了"
+  uint32 hwnd = 2;
+  string title = 3;
+  string process = 4;
+  uint32 pid = 5;
+  Rect rect = 6;
+  string method = 7;       // already / set-foreground / attach-thread / alt-key / ""
+  int32 matched = 8;       // 命中了几个 (按标题/进程名找时)
+}
+
+// ---------------------------------------------------------------- 被控端提示
+
+message NotifyRequest {
+  string message = 1;
+  string detail = 2;
+  double seconds = 3;      // 0 = 用服务端默认 6 秒
+  string corner = 4;       // br / tr / tl / bl
+}
+
 // ---------------------------------------------------------------- kuuki 老协议
 
 message KuukiMessageRequest {
@@ -229,6 +292,14 @@ service RemoteControl {
   rpc PasteText(PasteTextRequest) returns (Ack);
   // 预检: 这些键在当前键盘布局里能不能发 (不实际按键)
   rpc CheckKeys(KeyCheckRequest) returns (KeyCheckReply);
+
+  // 窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
+  rpc ListWindows(ListWindowsRequest) returns (ListWindowsReply);
+  rpc GetForegroundWindow(Empty) returns (WindowInfo);
+  rpc FocusWindow(FocusWindowRequest) returns (FocusWindowReply);
+
+  // 被控端无焦点角标 (只通知, 不抢前台)
+  rpc Notify(NotifyRequest) returns (Ack);
 
   // 空气鼠标老协议透传 (姿态数据 / 鼠标键 / 文本)
   rpc SendKuukiMessage(KuukiMessageRequest) returns (KuukiMessageReply);

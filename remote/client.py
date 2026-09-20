@@ -264,6 +264,26 @@ class GrpcClient:
             request.at_y = int(args["y"])
         return request
 
+    def _focus_request(self, args: dict):
+        """``window.focus`` 参数 -> protobuf。
+
+        ``hwnd`` 只有真的给了才写: HWND 不会是 0, 写 0 就等于"找句柄为 0 的窗口",
+        必然 not_found。``wait`` 是 optional, 同理只对显式传入生效 (缺省留给服务
+        端默认的 0.5 秒)。
+        """
+        pb = self._pb
+        request = pb.FocusWindowRequest(
+            title=args.get("title", ""),
+            process=args.get("process", args.get("proc", "")),
+            index=int(args.get("index", 0) or 0),
+        )
+        handle = args.get("hwnd", args.get("handle"))
+        if handle:
+            request.hwnd = int(handle)
+        if args.get("wait") is not None:
+            request.wait = float(args["wait"])
+        return request
+
     def _drag_request(self, args: dict):
         pb = self._pb
         request = pb.DragRequest(button=args.get("button", "left"))
@@ -400,6 +420,28 @@ class GrpcClient:
                 ),
                 **self._kwargs(),
             ),
+            "window.list": lambda: self.stub.ListWindows(
+                pb.ListWindowsRequest(
+                    title=args.get("title", ""),
+                    process=args.get("process", args.get("proc", "")),
+                    limit=int(args.get("limit", 0) or 0),
+                    include_hidden=bool(args.get("include_hidden", False)),
+                ),
+                **self._kwargs(),
+            ),
+            "window.foreground": lambda: self.stub.GetForegroundWindow(empty, **self._kwargs()),
+            "window.focus": lambda: self.stub.FocusWindow(
+                self._focus_request(args), **self._kwargs()
+            ),
+            "notify": lambda: self.stub.Notify(
+                pb.NotifyRequest(
+                    message=args.get("message", args.get("text", "")),
+                    detail=args.get("detail", ""),
+                    seconds=float(args.get("seconds", 0) or 0),
+                    corner=args.get("corner", "br"),
+                ),
+                **self._kwargs(),
+            ),
             "kuuki": lambda: self.stub.SendKuukiMessage(
                 pb.KuukiMessageRequest(
                     json=json.dumps(args.get("message", args), ensure_ascii=False)
@@ -490,6 +532,20 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     op.add_argument("name")
     op.add_argument("--args", default="{}", help="JSON 参数")
 
+    # 窗口: 先认窗口再视觉定位 —— 光看截图分不清"这块界面属于哪个应用"
+    win = sub.add_parser("windows", help="列出被控端顶层窗口")
+    win.add_argument("--title", default="", help="标题子串过滤 (不区分大小写)")
+    win.add_argument("--process", default="", help="进程名或 pid 子串, 例如 msedge")
+    win.add_argument("--limit", type=int, default=0, help="最多列几个 (0 = 不限)")
+    win.add_argument("--include-hidden", action="store_true", help="连隐藏窗口一起列")
+
+    foc = sub.add_parser("focus", help="把某个窗口切到前台")
+    foc.add_argument("--hwnd", type=int, default=None, help="直接给窗口句柄 (最可靠)")
+    foc.add_argument("--title", default="", help="标题子串")
+    foc.add_argument("--process", default="", help="进程名或 pid 子串")
+    foc.add_argument("--index", type=int, default=0, help="命中多个时取第几个 (按 Z 序)")
+    foc.add_argument("--wait", type=float, default=None, help="切换后最多等多久确认 (秒)")
+
     shot = sub.add_parser("screenshot", help="抓一帧存文件")
     shot.add_argument("path")
     _add_shot_args(shot)
@@ -534,6 +590,23 @@ def _parse_color(text: str) -> Tuple[int, int, int]:
     if len(raw) != 6:
         raise ValueError(f"--color 需要 6 位十六进制: #1a73e8，收到 {text!r}")
     return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
+
+
+def _focus_args(args: argparse.Namespace) -> dict:
+    """``focus`` 子命令 -> ``window.focus`` 的 args。
+
+    ``--wait`` 没给时**不要**填 0: 传 0 等于"不等待确认", 而缺省是服务端默认的
+    0.5 秒轮询 —— 前者会让 ``focused`` 永远是 False (切前台是异步的)。
+    """
+    out: Dict[str, Any] = {"title": args.title, "process": args.process}
+    if args.hwnd is not None:
+        out["hwnd"] = int(args.hwnd)
+    out["index"] = int(args.index or 0)
+    if args.wait is not None:
+        out["wait"] = float(args.wait)
+    if not out["title"] and not out["process"] and "hwnd" not in out:
+        raise ValueError("focus 需要 --hwnd / --title / --process 之一")
+    return out
 
 
 def _locate_result(
@@ -665,6 +738,22 @@ async def _run_ws(args: argparse.Namespace) -> int:
             payload = json.loads(args.args)
             print(json.dumps(await client.call(args.name, payload), ensure_ascii=False, indent=2))
             return 0
+        if args.action == "windows":
+            result = await client.call(
+                "window.list",
+                {
+                    "title": args.title,
+                    "process": args.process,
+                    "limit": args.limit,
+                    "include_hidden": args.include_hidden,
+                },
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "focus":
+            result = await client.call("window.focus", _focus_args(args))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.action == "screenshot":
             header, payload = await client.screenshot(_shot_args(args))
             path = args.path
@@ -709,6 +798,22 @@ def _run_grpc(args: argparse.Namespace) -> int:
                 client.call(args.name, json.loads(args.args)),
                 ensure_ascii=False, indent=2,
             ))
+            return 0
+        if args.action == "windows":
+            result = client.call(
+                "window.list",
+                {
+                    "title": args.title,
+                    "process": args.process,
+                    "limit": args.limit,
+                    "include_hidden": args.include_hidden,
+                },
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "focus":
+            result = client.call("window.focus", _focus_args(args))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.action == "screenshot":
             payload = client.screenshot(_shot_args(args))
@@ -783,6 +888,22 @@ async def _run_peerjs(args: argparse.Namespace) -> int:
                     await client.call(args.name, payload), ensure_ascii=False, indent=2
                 )
             )
+            return 0
+        if args.action == "windows":
+            result = await client.call(
+                "window.list",
+                {
+                    "title": args.title,
+                    "process": args.process,
+                    "limit": args.limit,
+                    "include_hidden": args.include_hidden,
+                },
+            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "focus":
+            result = await client.call("window.focus", _focus_args(args))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.action == "screenshot":
             payload = await client.screenshot(_shot_args(args))

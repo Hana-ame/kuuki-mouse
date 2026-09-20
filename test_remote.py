@@ -765,6 +765,215 @@ def test_new_ops_agree_across_transports():
         assert flatten(ws_result) == flatten(grpc_result), f"{op} {args} 返回值不一致"
         assert ws_side == grpc_side, f"{op} {args} 副作用不一致"
 
+# ================================================================ 窗口 (P2)
+#
+# 窗口 op 是"视觉定位"的补集: 截图能告诉你"有块像输入框的东西", 说不出它属于
+# 哪个应用; window.list / window.focus 用标题与进程名回答这个问题。
+# 真机枚举只在 Windows 上做一次只读断言, 跨传输一致性用打桩的窗口后端 ——
+# 不去动真实桌面 (把用户的窗口切来切去是最招人烦的副作用)。
+
+
+SAMPLE_WINDOWS = [
+    {"hwnd": 101, "title": "Gemini - Google Chrome", "process": "chrome", "pid": 1204,
+     "rect": {"left": 0, "top": 0, "width": 1600, "height": 900},
+     "visible": True, "minimized": False, "foreground": True},
+    {"hwnd": 102, "title": "kuuki-mouse — README.md", "process": "Code", "pid": 88,
+     "rect": {"left": 40, "top": 40, "width": 1200, "height": 800},
+     "visible": True, "minimized": False, "foreground": False},
+    {"hwnd": 103, "title": "备忘录", "process": "notepad", "pid": 991,
+     "rect": {"left": 300, "top": 200, "width": 400, "height": 300},
+     "visible": True, "minimized": True, "foreground": False},
+]
+
+
+def _fake_window_backend(monkeypatch, windows):
+    """把 ``remote.window`` 的三个入口换成假实现, 并记录"前台"是谁。
+
+    打桩 ``window_supported`` 是必要的: service 会先问支持不支持, 而这里的假后端
+    在任何平台上都能跑, 免得 Linux CI 上整段被跳过。
+    """
+    from remote import window as window_module
+
+    state = {"foreground": windows[0]["hwnd"] if windows else 0}
+
+    def list_windows(title="", process="", include_hidden=False, limit=0):
+        # foreground 不是窗口的固有属性, 取决于 state —— 每次列都要重算
+        found = [
+            dict(item, foreground=item["hwnd"] == state["foreground"])
+            for item in windows
+            if window_module._matches(item, title, process)
+        ]
+        return found[:limit] if limit else found
+
+    def foreground_window():
+        for item in windows:
+            if item["hwnd"] == state["foreground"]:
+                return dict(item, foreground=True)
+        return None
+
+    def focus_window(hwnd=None, title="", process="", index=0, wait=0.0):
+        if hwnd is None:
+            candidates = list_windows(title=title, process=process)
+            if not candidates:
+                raise window_module.WindowError(
+                    "not_found", f"没有匹配 title={title!r} process={process!r} 的窗口"
+                )
+            if index >= len(candidates):
+                raise window_module.WindowError("not_found", f"取不到第 {index} 个")
+            target = candidates[index]
+            hwnd = target["hwnd"]
+        else:
+            target = next((item for item in windows if item["hwnd"] == hwnd), None)
+            if target is None:
+                raise window_module.WindowError("not_found", f"没有句柄 {hwnd}")
+        state["foreground"] = hwnd
+        return {
+            "focused": True,
+            "hwnd": hwnd,
+            "title": target["title"],
+            "process": target.get("process", ""),
+            "pid": target.get("pid", 0),
+            "rect": target.get("rect", {}),
+            "method": "set-foreground",
+            "matched": 1,
+        }
+
+    monkeypatch.setattr(window_module, "window_supported", lambda: True)
+    monkeypatch.setattr(window_module, "list_windows", list_windows)
+    monkeypatch.setattr(window_module, "foreground_window", foreground_window)
+    monkeypatch.setattr(window_module, "focus_window", focus_window)
+    return state
+
+
+def test_window_ops_are_registered():
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+
+    assert service.resolve_op("windows") == "window.list"
+    assert service.resolve_op("foreground") == "window.foreground"
+    assert service.resolve_op("focus") == "window.focus"
+
+    capabilities = service.handle("info", {})["capabilities"]
+    for op in ("window.list", "window.foreground", "window.focus"):
+        assert op in capabilities
+
+
+def test_window_focus_needs_a_target(monkeypatch):
+    """不给 hwnd / title / process 就切前台 = 让受控端去猜, 必须当场拒绝。"""
+    _fake_window_backend(monkeypatch, SAMPLE_WINDOWS)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+
+    with pytest.raises(RemoteError) as exc:
+        service.handle("window.focus", {})
+    assert exc.value.code == "bad_request"
+
+    with pytest.raises(RemoteError) as exc:
+        service.handle("window.focus", {"title": "不存在的窗口"})
+    assert exc.value.code == "not_found"
+
+
+def test_window_matching_ignores_case_and_takes_pid():
+    """标题/进程名匹配是子串且不区分大小写; process 也接受 pid。"""
+    from remote import window as window_module
+
+    assert window_module._matches(SAMPLE_WINDOWS[0], title="gemini")
+    assert window_module._matches(SAMPLE_WINDOWS[0], title="GEMINI")
+    assert not window_module._matches(SAMPLE_WINDOWS[0], title="gemini", process="msedge")
+    assert window_module._matches(SAMPLE_WINDOWS[0], process="chrome")
+    assert window_module._matches(SAMPLE_WINDOWS[0], process="1204")  # pid 也算
+    assert not window_module._matches(SAMPLE_WINDOWS[1], process="chrome")
+
+
+def test_window_focus_reports_real_foreground(monkeypatch):
+    """focus 之后前台要真的变, 而且列表里的 foreground 只有一个 True。"""
+    state = _fake_window_backend(monkeypatch, SAMPLE_WINDOWS)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+
+    result = service.handle("window.focus", {"title": "备忘录"})
+    assert result["focused"] is True
+    assert result["hwnd"] == 103
+    assert state["foreground"] == 103
+
+    windows = service.handle("window.list", {})["windows"]
+    assert [item["hwnd"] for item in windows if item["foreground"]] == [103]
+
+    # 命中多个时按 index 取, 并把总数告诉调用方 (matched > 1 就该换更窄的条件)
+    service.handle("window.focus", {"process": "chrome", "index": 0})
+    assert service.handle("window.foreground", {})["hwnd"] == 101
+
+
+def test_window_ops_agree_across_transports(monkeypatch):
+    """窗口 op 三条传输返回同样的字段与值。
+
+    两个容易踩的坑都在这一条里: ① gRPC 的 ``WindowInfo`` 是平铺消息, WS 侧也
+    必须平铺 (不能包一层 ``{"window": ...}``); ② ``hwnd`` 用 uint32, 因为
+    protobuf 的 JSON 会把 64 位整数变成字符串, 与 WS 的 int 对不上。
+    """
+    from remote.grpc_server import GrpcServer
+    from remote.client import GrpcClient, WsClient
+
+    _fake_window_backend(monkeypatch, SAMPLE_WINDOWS)
+    cases = [
+        ("window.list", {}),
+        ("window.list", {"title": "gemini", "limit": 2}),
+        ("window.list", {"process": "chrome"}),
+        ("window.foreground", {}),
+        ("window.focus", {"title": "README"}),
+        ("window.focus", {"process": "notepad"}),
+        ("window.focus", {"hwnd": 102}),
+    ]
+
+    async def over_ws():
+        service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+        server = WsServer(service, host="127.0.0.1", port=0)
+        await server.start()
+        port = server._server.sockets[0].getsockname()[1]
+        collected = []
+        try:
+            async with WsClient(f"ws://127.0.0.1:{port}/", timeout=20) as client:
+                for op, args in cases:
+                    collected.append(await client.call(op, args))
+        finally:
+            await server.close()
+        return collected
+
+    ws_results = run(over_ws())
+
+    # 上面那一遍把假后端的"前台"改过了, 重放前要复位 —— 否则 gRPC 这一遍的
+    # 起点就不是同一个状态, 比出来的差异是测试自己造成的。
+    _fake_window_backend(monkeypatch, SAMPLE_WINDOWS)
+
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    grpc_server = GrpcServer(service, host="127.0.0.1", port=0)
+    grpc_results = []
+    try:
+        with GrpcClient(f"127.0.0.1:{grpc_server.start()}", timeout=20) as client:
+            for op, args in cases:
+                grpc_results.append(client.call(op, args))
+    finally:
+        grpc_server.stop(0.5)
+
+    for (op, args), ws_result, grpc_result in zip(cases, ws_results, grpc_results):
+        assert flatten(ws_result) == flatten(grpc_result), f"{op} {args} 返回值不一致"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="窗口枚举只有 Windows 受控端实现")
+def test_window_list_on_real_desktop():
+    """真机只读冒烟: 至少列得出一个带标题的窗口, 且前台窗口就在列表里。"""
+    from remote import window as window_module
+
+    assert window_module.window_supported() is True
+    windows = window_module.list_windows()
+    if not windows:
+        pytest.skip("这台机器没有可见窗口 (锁屏 / 无会话), 不做断言")
+    for item in windows:
+        assert item["hwnd"] > 0
+        assert item["pid"] > 0
+        assert set(item["rect"]) == {"left", "top", "width", "height"}
+    foreground = window_module.foreground_window()
+    if foreground is not None:
+        assert foreground["hwnd"] in {item["hwnd"] for item in windows}
+
+
 # ================================================================ 控制端 (P3)
 #
 # ``remote/ctl.py`` = 多机编排层。这些测试全都不联网: 要么直接调 registry /

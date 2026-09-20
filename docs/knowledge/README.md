@@ -101,6 +101,7 @@
 - [真人正在用这台电脑时，注入会互相干扰](gui-user-interference.md)
 - [remote/vision: 让"看"也归属 repo 的定位模块](gui-vision-locate-module.md)
 - [locate 之前, 先确认你操作的是哪个窗口](gui-window-focus-gap.md)
+- [window.*: 视觉定位的语义地基](gui-window-ops-module.md)
 
 ## 本机环境
 
@@ -120,4 +121,4 @@
 
 ---
 
-共 **59 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **60 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

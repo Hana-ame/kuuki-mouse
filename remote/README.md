@@ -119,6 +119,8 @@ python -m remote.client ws op mouse.drag --args '{"points":[[100,100],[300,200],
 python -m remote.client ws op keyboard.combo --args '{"keys":"ctrl+shift+s","hold_ms":150}'
 python -m remote.client ws op keyboard.hold --args '{"key":"f2","ms":600}'
 python -m remote.client ws op keyboard.check --args '{"keys":["a","enter","f13","中"]}'
+python -m remote.client ws windows --process msedge
+python -m remote.client ws focus --title "Gemini"   # 切前台 + 确认, 之后输入有确定归宿
 python -m remote.client ws screenshot /tmp/shot.png --max-width 1280 --draw-cursor
 python -m remote.client ws watch /tmp/frames --fps 2 --count 5 --format jpeg --max-width 1280
 python -m remote.client grpc info
@@ -376,7 +378,9 @@ asyncio.run(main())
 | `GetMonitors` | 屏幕列表 |
 | `GetMousePosition` / `MoveMouse` / `MoveMouseRelative` | 光标 |
 | `ClickMouse` / `MouseDown` / `MouseUp` / `Scroll` / `Drag` | 鼠标动作 |
-| `TypeText` / `PressKey` / `Hotkey` / `PasteText` | 键盘 |
+| `TypeText` / `PressKey` / `Hotkey` / `Combo` / `HoldKey` / `PasteText` / `CheckKeys` | 键盘 |
+| `ListWindows(ListWindowsRequest) → ListWindowsReply` / `GetForegroundWindow` / `FocusWindow` | 窗口 (见第 7 节; 仅 Windows 受控端) |
+| `Notify(NotifyRequest) → Ack` | 被控端无焦点角标 |
 | `SendKuukiMessage` | 老协议 JSON 透传 |
 
 鉴权: metadata `authorization: Bearer <token>`。
@@ -415,15 +419,22 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `keyboard.hold` *`hold`* | `key` `ms` | 按住单键 `ms` 毫秒再松开 |
 | `keyboard.paste` *`paste`* | `text` | 写剪贴板 + Ctrl/Cmd+V (**中文/emoji 用这个**) |
 | `keyboard.check` *`check`/`keys`* | `keys` 或 `key` | **预检**键能不能发 (不按键) |
-| `notify` *`popup`* | `message` `detail` `seconds` `corner` | 屏角弹一个**不抢焦点**的角标 (`remote/toast.py`)。`corner` 取 `br/tr/tl/bl`。**gRPC 侧尚未暴露** —— 见下面 ⚠️ |
+| `notify` *`popup`* | `message` `detail` `seconds` `corner` | 屏角弹一个**不抢焦点**的角标 (`remote/toast.py`)。`corner` 取 `br/tr/tl/bl` |
+| `window.list` *`windows`* | `title` `process` `limit` `include_hidden` | 列出顶层窗口, 按 Z 序 (最靠前在前)。`title`/`process` 是子串过滤 (不分大小写, `process` 也认 pid)。**仅 Windows** (`remote/window.py`) |
+| `window.foreground` *`foreground`* | — | 当前前台窗口 (平铺一个窗口 dict; `hwnd=0` 表示没有前台, 如锁屏)。**仅 Windows** |
+| `window.focus` *`focus`* | `hwnd` **或** `title`/`process` + `index` `wait` | 把窗口切到前台并**确认**。`focused` 是确认结果不是"调用成功" (Windows 前台锁可能让切换失败); 命中多个时取 Z 序第 `index` 个, 总数在 `matched` 里。**仅 Windows** |
 | `kuuki` *`sensor`* | `message` | 老协议透传 |
 
+窗口三个 op 是**视觉定位的补集**: 截图说得出"屏幕上有块像输入框的东西", 说不出
+它属于哪个应用 —— 先 `window.list` / `window.focus` 用标题与进程名认窗口、切前台,
+再在窗口内部 locate / click (踩过的坑见 `docs/knowledge/gui-window-focus-gap.md`)。
+
 > ⚠️ **三传输并不完全等价**: 上表里 `screen.grab` / `screen.watch` 只在 WS 实现
-> (gRPC 的推流走的是 `StreamScreenshots` 服务端流式, 不是 op), `notify` 则只在
-> WS / PeerJS 实现 —— `remote/grpc_server.py` 里没有对应的 RPC。三条传输"同一份
-> `handle`"只对手表里的**鼠标/键盘/截屏**那部分成立, 加新 op 时两个翻译层都要跟上
-> (见 `docs/knowledge/arch-one-impl-three-transports.md`) 与
-> `docs/knowledge/todo-open-items.md`。
+> (gRPC 的推流走的是 `StreamScreenshots` 服务端流式, 不是 op)。其余 op —— 包括
+> 窗口与 `notify` —— 三条传输都有: gRPC 侧对应 `ListWindows` / `GetForegroundWindow` /
+> `FocusWindow` / `Notify`。加新 op 时两个翻译层都要跟上
+> (见 `docs/knowledge/arch-one-impl-three-transports.md` 与
+> `docs/knowledge/todo-open-items.md`)。
 
 ## 8. 截屏实现与已知限制
 
@@ -518,8 +529,8 @@ zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstalle
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v   # 126 passed / 1 skipped
-                                     # 其中 29 项专测控制端, 16 项专测 PeerJS, 8 项专测 vision
+python -m pytest test_remote.py -v   # 132 passed / 1 skipped
+                                     # 其中 29 项专测控制端, 16 项专测 PeerJS, 8 项专测 vision, 7 项专测窗口
 python -m remote --selftest --selftest-input
 ```
 
@@ -540,7 +551,13 @@ python -m remote --selftest --selftest-input
   假鼠标/假键盘断言, 不碰真实光标与按键。
 - **三传输等价**: 15 个新动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
   边界上也一致 —— `interval=0` / `duration=0` 这类"显式给 0"与"没给"能区分开
-  (proto3 普通标量做不到, 相关字段已改成 `optional`)。
+  (proto3 普通标量做不到, 相关字段已改成 `optional`)。窗口 op 另有 7 个用例
+  (打桩后端跨传输比对, 不动真桌面)。
+- **窗口 op + 端到端**: `window.list` 列出真实桌面窗口 (标题/进程/pid/Z 序),
+  `window.focus` 在 Code 与 msedge 之间来回切换且 `focused` / `window.foreground`
+  逐一吻合。用"focus 认窗口 → 点进提问框 → paste → 帧差否证 → 回车"的**纯 repo**
+  流程向 Gemini 发出一条消息并收到回复 (`evidence/verify_window_fix.py`) ——
+  此前同样流程因"不知道前台是谁"点进过错误的窗口。
 
 > `.venv-win` 里现在装了 pytest (9.1.1)。装的时候若 pip 报连不上
 > `127.0.0.1:10809`, 那是系统代理变量指到了一个没在跑的代理, 加

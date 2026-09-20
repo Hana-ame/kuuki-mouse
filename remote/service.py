@@ -142,6 +142,9 @@ class RemoteService:
             "keyboard.hold": self._op_keyboard_hold,
             "keyboard.paste": self._op_keyboard_paste,
             "keyboard.check": self._op_keyboard_check,
+            "window.list": self._op_window_list,
+            "window.foreground": self._op_window_foreground,
+            "window.focus": self._op_window_focus,
             "kuuki": self._op_kuuki,
             "notify": self._op_notify,
         }
@@ -170,6 +173,9 @@ class RemoteService:
             "keys": "keyboard.check",
             "sensor": "kuuki",
             "popup": "notify",
+            "windows": "window.list",
+            "foreground": "window.foreground",
+            "focus": "window.focus",
         }
 
     # ---------------- 控制器 (延迟创建, 避免只截屏的场景也去加载 pynput) ----------------
@@ -453,6 +459,81 @@ class RemoteService:
         if isinstance(keys, str):
             keys = [keys]
         return self.controller.check_keys(keys)
+
+    # ---------------- 窗口 ----------------
+    # 这三个 op 是"视觉定位"的补集: 视觉能告诉你"屏幕上有块像输入框的东西",
+    # 但说不出"这块东西属于哪个应用"。先用标题/进程名认窗口、把它切到前台,
+    # 之后的 locate / click 才有了确定的作用域 (踩过的坑见
+    # docs/knowledge/gui-window-focus-gap.md)。
+    def _op_window_list(self, args: dict) -> dict:
+        """列出顶层窗口, 按 Z 序 (最靠前的最先)。"""
+        from . import window
+
+        if not window.window_supported():
+            raise RemoteError("unsupported", "窗口枚举需要被控端是 Windows")
+        title = _as_str(args.get("title"), "title", "")
+        process = _as_str(args.get("process", args.get("proc")), "process", "")
+        limit = _as_int(args.get("limit"), "limit", 0)
+        include_hidden = bool(args.get("include_hidden", False))
+        try:
+            items = window.list_windows(
+                title=title, process=process,
+                include_hidden=include_hidden, limit=limit,
+            )
+        except window.WindowError as exc:
+            raise RemoteError(exc.code, exc.message)
+        return {"windows": items, "count": len(items)}
+
+    def _op_window_foreground(self, args: dict) -> dict:
+        """当前前台是谁。跑任何点击流程之前先问一句, 比事后核对截图便宜。
+
+        返回**平铺**的窗口信息 (不是 ``{"window": {...}}``): gRPC 侧直接回一个
+        ``WindowInfo`` 消息, 嵌套一层就没法与 WS 的返回值对齐了。没有前台窗口
+        (锁屏 / 桌面) 时给全零的一组, ``hwnd == 0`` 就是"没有" —— 调用方不必
+        为了键在不在而分支。
+        """
+        from . import window
+
+        if not window.window_supported():
+            raise RemoteError("unsupported", "前台查询需要被控端是 Windows")
+        info = window.foreground_window()
+        if info is None:
+            return {
+                "hwnd": 0,
+                "title": "",
+                "process": "",
+                "pid": 0,
+                "rect": {"left": 0, "top": 0, "width": 0, "height": 0},
+                "visible": False,
+                "minimized": False,
+                "foreground": False,
+            }
+        return dict(info)
+
+    def _op_window_focus(self, args: dict) -> dict:
+        """把某个窗口切到前台 (按 hwnd / 标题 / 进程名选, 不用猜坐标)。
+
+        ``focused`` 是**确认之后**的结果, 不是"调用成功了": Windows 的前台锁
+        可能让这次切换静默失败, 调用方必须看这个字段, 不能假设。
+        """
+        from . import window
+
+        if not window.window_supported():
+            raise RemoteError("unsupported", "窗口切换需要被控端是 Windows")
+        hwnd = args.get("hwnd", args.get("handle"))
+        hwnd = _as_int(hwnd, "hwnd") if hwnd is not None else None
+        title = _as_str(args.get("title"), "title", "")
+        process = _as_str(args.get("process", args.get("proc")), "process", "")
+        if hwnd is None and not title and not process:
+            raise RemoteError("bad_request", "window.focus 需要 hwnd / title / process 之一")
+        index = _as_int(args.get("index"), "index", 0)
+        wait = _as_float(args.get("wait"), "wait", window.DEFAULT_FOCUS_WAIT)
+        try:
+            return window.focus_window(
+                hwnd=hwnd, title=title, process=process, index=index, wait=wait
+            )
+        except window.WindowError as exc:
+            raise RemoteError(exc.code, exc.message)
 
     # ---------------- 被控端提示 / 许可 ----------------
     def _op_notify(self, args: dict) -> dict:

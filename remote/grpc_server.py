@@ -369,6 +369,98 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             )
         return reply
 
+    # ---------------- 窗口 ----------------
+    @staticmethod
+    def _window_to(item: Optional[dict]):
+        """service 返回的窗口 dict -> ``WindowInfo``; 空输入返回 None。"""
+        if not item:
+            return None
+        message = pb.WindowInfo(
+            hwnd=int(item.get("hwnd", 0)),
+            title=item.get("title", ""),
+            process=item.get("process", ""),
+            pid=int(item.get("pid", 0)),
+            visible=bool(item.get("visible")),
+            minimized=bool(item.get("minimized")),
+            foreground=bool(item.get("foreground")),
+        )
+        rect = _rect_from(item.get("rect"))
+        if rect is not None:
+            message.rect.CopyFrom(rect)
+        return message
+
+    def ListWindows(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle(
+                "window.list",
+                {
+                    "title": request.title,
+                    "process": request.process,
+                    "limit": int(request.limit),
+                    "include_hidden": bool(request.include_hidden),
+                },
+            )
+        reply = pb.ListWindowsReply(count=int(result.get("count", 0)))
+        for item in result.get("windows", []):
+            message = self._window_to(item)
+            if message is not None:
+                reply.windows.append(message)
+        return reply
+
+    def GetForegroundWindow(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle("window.foreground", {})
+        # service 返回的是平铺的窗口 dict (与 WS 一致), 直接填进 WindowInfo;
+        # 没有前台窗口 (锁屏) 时 hwnd=0 一整套零值, 照样能填 —— 就是"没有"
+        return self._window_to(result) or pb.WindowInfo()
+
+    def FocusWindow(self, request, context):
+        self._check_auth(context)
+        args = {
+            "title": request.title,
+            "process": request.process,
+            "index": int(request.index),
+        }
+        # handle=0 视为"没给": HWND 不会是 0, 直接塞进去会变成"找 hwnd 0"
+        if request.hwnd:
+            args["hwnd"] = int(request.hwnd)
+        # wait 是 optional: 没给 = 用服务默认 0.5s, 显式给 0 = 不等待确认
+        if request.HasField("wait"):
+            args["wait"] = float(request.wait)
+        with _translate(context):
+            result = self.service.handle("window.focus", args)
+        reply = pb.FocusWindowReply(
+            focused=bool(result.get("focused")),
+            hwnd=int(result.get("hwnd", 0)),
+            title=result.get("title", ""),
+            process=result.get("process", ""),
+            pid=int(result.get("pid", 0)),
+            method=result.get("method", ""),
+            matched=int(result.get("matched", 0)),
+        )
+        rect = _rect_from(result.get("rect"))
+        if rect is not None:
+            reply.rect.CopyFrom(rect)
+        return reply
+
+    # ---------------- 被控端角标 ----------------
+    def Notify(self, request, context):
+        self._check_auth(context)
+        args = {"message": request.message, "detail": request.detail}
+        # seconds 是普通 double: 不给就是 0, 而"给 0"在 service 里也是 0 ——
+        # 两边都收不到"缺省 6 秒"。所以这里反过来: 只有真的给了正数才放进 args,
+        # 让"没给"落到 service 的默认, 与 WS 侧参数缺省一致。
+        if request.seconds > 0:
+            args["seconds"] = float(request.seconds)
+        # corner 同理: proto3 的 string 分不清"没给"与"显式空串", 而 WS 侧不给
+        # 就是默认 br —— 这里补成 br, 让两边缺省行为一致 (显式给非法值照样报错)
+        args["corner"] = request.corner or "br"
+        with _translate(context):
+            result = self.service.handle("notify", args)
+        return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
+
     # ---------------- kuuki 老协议 ----------------
     def SendKuukiMessage(self, request, context):
         self._check_auth(context)

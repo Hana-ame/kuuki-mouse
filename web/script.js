@@ -357,7 +357,11 @@
         if (!room) { statusEl.textContent = '请输入房间码'; return; }
         token = ($('tokenInput').value || '').trim();
         authFailed = false;   // 改过 token 就值得再试一次
-        history.replaceState(null, '', `#/${room}`);
+        // token 要留在地址栏里: 手机刷新页面是常事, 抹掉的话每次都得重打一遍口令
+        history.replaceState(
+            null, '',
+            token ? `#/${room}?token=${encodeURIComponent(token)}` : `#/${room}`
+        );
         const ok = await requestPermission();
         if (!ok) { statusEl.textContent = '传感器权限被拒绝'; return; }
         pairEl.classList.add('hidden');

@@ -21,39 +21,111 @@
   - **GitHub Pages** — 手机页面托管
 - 二维码内容 = `https://<你的用户名>.github.io/<仓库名>/#/<房间码>`, 手机扫码即配对。
 
-## 扩展: 本机远程控制 (remote/) — 鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输 (受控端仅 Windows)
+## 使用说明: 先挑你要哪一条
+
+本仓库里有两件独立的事, 入口完全不同, 别混着看:
+
+| 我想… | 入口 | 跑在哪 | 看哪节 |
+|---|---|---|---|
+| 手机当**空气鼠标** (传感器 → 控制光标) | `python main.py` | 被控的 Windows PC + 手机浏览器 | [快速开始](#快速开始) |
+| 让脚本 / agent / 另一台机器**操作这台电脑** (鼠标键盘 + 截屏) | `python -m remote` | **被控的那台** Windows | 下面《扩展: 本机远程控制》一节 |
+| 一台电脑管**多台**被控机 | `python -m remote.ctl` | 任意机器 (控制端不挑平台) | 该节里的《怎么连上去》 |
+
+两条都要先装依赖 (空气鼠标只用前者, `remote/` 两个都要):
+
+```bash
+pip install -r requirements.txt -r requirements-remote.txt
+```
+
+## 扩展: 本机远程控制 (remote/) — 鼠标键盘 + 截屏 (受控端仅 Windows)
 
 除空气鼠标之外, 本仓库还提供一个**本机电脑操作服务**: 用鼠标键盘操作这台机器、
-把屏幕截图取回来, 供 agent / 脚本 / 别的机器调用。**三种传输默认全开**:
+把屏幕截图取回来, 供 agent / 脚本 / 别的机器调用。
 
 > **受控端只支持 Windows**。"受控端"指被操作的那台机器, 也就是下面这个服务本身 ——
 > 它必须**原生跑在 Windows 上**, 非 Windows 会在启动前被拒绝 (退出码 2, 提示里给可照做
 > 的命令)。WSL / Linux / 手机一侧只跑**客户端** (`python -m remote.client …`) 连过来就行,
 > 客户端不挑平台。
 
-| 传输 | 默认端点 | 适用场景 |
+### 选传输: 默认只开 PeerJS
+
+三种传输**按需开启**, 默认只开 PeerJS —— 它不需要任何开放端口, 是拿来就能用的那个:
+
+| 传输 | 端点 | 什么时候开它 |
 |---|---|---|
-| WebSocket | `ws://127.0.0.1:8765` | 最常用, JSON + 二进制截屏帧 + 推流 |
-| gRPC | `127.0.0.1:50051` | 强类型接口, 服务端流式推帧 |
-| PeerJS | 无本地端口 (走 `0.peerjs.com` 公开 broker) | 跨网络免端口转发/免域名, 靠房间码配对 |
+| PeerJS | 无本地端口 (走 `0.peerjs.com` 公开 broker) | **默认**。跨网络/异地、不想开端口转发、不想配域名 |
+| WebSocket | `ws://127.0.0.1:8765` | 本机脚本 / 局域网。JSON + 二进制截屏帧 + 推流 |
+| gRPC | `127.0.0.1:50051` | 要强类型接口, 或服务端流式推帧 |
+
+按场景照抄 (左边跑在被控机上, 右边是控制端怎么连):
+
+| 场景 | 被控端启动 | 控制端连它 |
+|---|---|---|
+| 本机脚本 / 调试 | `python -m remote --ws` | `python -m remote.client ws ping` |
+| 局域网里另一台来控制 | `python -m remote --ws --allow-remote --token T` | `--url ws://<ip>:8765 --token T` (防火墙放行 8765 入站) |
+| 跨网络 / 异地, 免端口转发 | `python -m remote` | `--peer kuuki-mouse-<房间码>` |
+| 要强类型 / 流式截屏 | `python -m remote --grpc` | `python -m remote.client grpc ping` |
+
+### 开关语义 (重要)
+
+**点名即选择**: 给了任何一个 `--ws` / `--grpc` / `--peerjs` 就以给的那几个为准,
+一个都没给才用默认 (只 PeerJS)。所以 `--ws` 是"只要 WebSocket", **不会**顺带把
+PeerJS 也注册到公开 broker 上 —— 那条通道是**出站**的, 跟你本地绑 `127.0.0.1`
+还是 `0.0.0.0` 没关系, 多开一条就等于多暴露一条。`--no-xxx` 是在这个结果上再减
+(`--ws --no-peerjs` 仍是只要 WS); 一个传输都不开会拒绝启动。
 
 ```bash
-pip install -r requirements.txt -r requirements-remote.txt
-python -m remote                     # 默认只开 PeerJS: 房间码配对, 不需要任何开放端口
-python -m remote --ws --grpc         # 本机两个端口: WS 8765 + gRPC 50051 (不连公开 broker)
-python -m remote --ws --peerjs       # WebSocket + PeerJS
+python -m remote                       # 默认只开 PeerJS: 房间码配对, 不需要任何开放端口
+python -m remote --ws                  # 只开 WebSocket 8765
+python -m remote --grpc                # 只开 gRPC 50051
+python -m remote --ws --grpc           # 本机两个端口 (不连公开 broker)
+python -m remote --ws --peerjs         # WebSocket + PeerJS
 python -m remote --ws --grpc --peerjs  # 三个全开
-python -m remote --room ABCD123      # 指定 PeerJS 房间码 (默认随机生成)
-python -m remote --qr                # 额外打印配对二维码 (启动本来就会给配对链接)
-python -m remote --selftest          # 自检: 报告截屏后端 + 抓一帧 (不动鼠标)
-python -m remote.client ws ping      # 命令行客户端
+python -m remote --room ABCD123        # 指定 PeerJS 房间码 (默认随机生成)
+python -m remote --ws --ws-port 9000   # 换端口 (端口参数不会替你把传输打开)
+python -m remote --qr                  # 额外打印配对二维码 (启动本来就会给配对链接)
+python -m remote --selftest            # 自检: 报告截屏后端 + 抓一帧 (不动鼠标)
 ```
 
-- 操作: 鼠标绝对/相对移动、点击/按住/滚轮/拖拽, 键盘输入/单键/组合键/剪贴板粘贴, 截屏 (区域/缩放/多格式/推流)。
-- 兼容原空气鼠标协议: 老协议 JSON (`t`/`mouse`/`text`/`key`) 会被直接路由到
+### 怎么连上去
+
+命令行客户端 (一次一个 op, 调试用):
+
+```bash
+python -m remote.client ws ping
+python -m remote.client ws --url ws://192.168.1.5:8765 --token T info
+python -m remote.client peerjs --peer kuuki-mouse-ABCDE ping
+python -m remote.client ws screenshot shot.png
+```
+
+多机控制端 `ctl` (一台管 N 台, 别名 / 分组 / 广播 + 结果汇总):
+
+```bash
+python -m remote.ctl machines add pc1 --transport ws --endpoint 192.168.1.5:8765 --token T
+python -m remote.ctl machines add home --transport peerjs --endpoint kuuki-mouse-ABCDE
+python -m remote.ctl ping --all          # 一组机器全 ping 一遍
+python -m remote.ctl shot shot.png -t pc1
+```
+
+打包好的 exe (给不装 Python 的机器用, 参数与上面完全一致):
+
+```bash
+kuuki-agent.exe                  # 只开 PeerJS (默认)
+kuuki-agent.exe --ws --grpc      # 本机两个端口
+kuuki-agent.exe --selftest       # 自检
+```
+
+### 注意事项
+
+- **安全**: 默认只绑 `127.0.0.1`; 要暴露到网络**必须** `--allow-remote --token <随机值>`。
+  PeerJS 走出站连接、不需要开放入站端口, 但知道房间码的人就能连进来 ——
+  房间码只是配对用的 (31^5 ≈ 2860 万种, 挡不住枚举), **不是凭证**, 不可信网络下同样要 `--token`。
+- **依赖**: `grpcio` / `protobuf` 只有开 `--grpc` 才需要 (没装也能正常起别的传输);
+  `websockets` 则是默认就要 —— PeerJS 连 broker 用的就是它。
+- **操作集**: 鼠标绝对/相对移动、点击/按住/滚轮/拖拽, 键盘输入/单键/组合键/剪贴板粘贴,
+  截屏 (区域/缩放/多格式/推流)。
+- **兼容原空气鼠标协议**: 老协议 JSON (`t`/`mouse`/`text`/`key`) 会被直接路由到
   `app.handle_message`, 所以 `web/` 页面可以不走 PeerJS, 直接把传感器数据发到本机 WS。
-- 默认只绑 `127.0.0.1`; 暴露到网络必须 `--allow-remote --token <随机值>`。
-  PeerJS 走的是出站连接、不需要开放入站端口, 但同样建议带 token。
 
 完整协议、op 一览、PeerJS 分块传输、跨机部署位置与已知限制见
 [remote/README.md](remote/README.md) (里面另有一批 WSLg / X11 的历史实测结论 ——

@@ -2,6 +2,12 @@
 
 放在仓库里用 `.venv-win\\Scripts\\python.exe wincheck.py` 跑。
 不移动鼠标、不按键, 只读状态 + 截屏。
+
+**跑之前得先把服务起在它连的那两个端口上** —— 本脚本连的是 WS 8766 / gRPC 50052
+(刻意避开默认的 8765/50051), 而传输是**按需开启**的, 默认只开 PeerJS 不开这两个,
+没起服务就跑会直接连不上::
+
+    python -m remote --ws --ws-port 8766 --grpc --grpc-port 50052
 """
 
 import asyncio

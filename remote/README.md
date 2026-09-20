@@ -57,6 +57,8 @@ python -m remote --token secret           # 三个传输都要求 token
 python -m remote --allow-remote --token secret   # 绑 0.0.0.0 (必须带 token)
 python -m remote --selftest               # 自检: 报告环境 + 抓一帧, 不动鼠标
 python -m remote --selftest --selftest-input     # 额外测一次鼠标移动(会动光标)
+python -m remote --qr                     # 额外打印配对二维码 (终端 + pair_<房间码>.png)
+python -m remote --page-url https://me.github.io/kuuki-mouse/   # 页面不在默认地址时
 ```
 
 **非 Windows 拒绝启动** (退出码 2, 与 `--allow-remote` 缺 token 的拒绝一致):

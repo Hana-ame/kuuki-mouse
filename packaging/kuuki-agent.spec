@@ -69,6 +69,8 @@ project_hidden = (
         # 仓库根顶层模块, 不是 remote 的子模块 —— 不会跟着 remote 自动进包,
         # 而 remote/__main__.py 靠它在英文系统上打中文帮助
         "utf8_stdio",
+        # --qr 时才 import (惰性), 静态分析抓不到; 漏了的话 exe 上 --qr 永远降级
+        "qrcode",
     ]
 )
 

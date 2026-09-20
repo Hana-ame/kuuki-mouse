@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 
 # 允许 `python remote/__main__.py` 直接跑 (此时包上下文为空, 需要把仓库根加进 sys.path)
@@ -103,6 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-fps", type=float, default=30.0, help="screen.watch 的帧率上限")
     parser.add_argument("--log-level", default="INFO", help="日志级别")
     parser.add_argument("--json", action="store_true", help="启动时以 JSON 打印端点信息")
+    parser.add_argument(
+        "--page-url",
+        default=None,
+        help="手机端页面地址 (默认从 git remote 推断 GitHub Pages 地址)",
+    )
+    parser.add_argument(
+        "--qr",
+        action="store_true",
+        help="额外打印配对二维码 (终端 ASCII + 当前目录 pair_<房间码>.png)",
+    )
     parser.add_argument("--selftest", action="store_true", help="自检后退出 (不启动服务)")
     parser.add_argument(
         "--selftest-input",
@@ -111,6 +122,70 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"kuuki remote {VERSION}")
     return parser
+
+
+#: git remote 也认不出来时的兜底 (本仓库 fork 后地址会变, 所以能推断就推断)
+FALLBACK_PAGE_URL = "https://hana-ame.github.io/kuuki-mouse/"
+
+
+def guess_page_url() -> str:
+    """从 ``git remote`` 推断 GitHub Pages 地址。
+
+    页面托管在哪取决于仓库是谁 fork 的, 硬编码会指到别人家去 —— 所以用 remote 推。
+    认不出来 (没装 git / 不是 GitHub / 不在仓库里) 就退回 ``FALLBACK_PAGE_URL``,
+    宁可给个能改的错地址, 也别什么都不说。
+    """
+    try:
+        import subprocess
+
+        done = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        match = re.match(
+            r"(?:git@|https://)github\.com[:/]([^/]+)/(.+?)(?:\.git)?/?$",
+            done.stdout.strip(),
+        )
+        if match:
+            return f"https://{match.group(1)}.github.io/{match.group(2)}/"
+    except Exception:  # noqa: BLE001 - 认不出就用兜底, 不值得为此失败
+        pass
+    return FALLBACK_PAGE_URL
+
+
+def show_qr(url: str, room: str) -> None:
+    """打印配对二维码 (终端 ASCII + PNG)。
+
+    ``qrcode`` 是惰性 import: 只有给了 ``--qr`` 才需要它, 平时跑服务不该被这个
+    可选依赖绊住 —— 而且它不在打进 exe 的必需路径上。
+
+    二维码里**只放房间码, 不放 token**: 二维码会被截图/转发, token 该手填
+    (页面上有输入框, 或把 ``#/房间码?token=xxx`` 自己做成码)。
+    """
+    try:
+        import qrcode
+    except ImportError:
+        print("  (没装 qrcode, 跳过二维码: pip install qrcode)")
+        return
+
+    code = qrcode.QRCode(border=2, box_size=8)
+    code.add_data(url)
+    code.make(fit=True)
+    try:
+        import pathlib
+
+        png = f"pair_{room}.png"
+        code.make_image().save(png)
+        print(f"  二维码图片: {pathlib.Path(png).resolve()}")
+    except Exception as exc:  # noqa: BLE001 - 缺 Pillow 等, 终端码还能用
+        print(f"  (二维码 PNG 保存失败: {exc} — 不影响配对)")
+    try:
+        # tty=True 会输出 ANSI 颜色码, Windows 终端显示为乱码, 所以用 tty=False
+        code.print_ascii(tty=False)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def selftest(service: RemoteService, with_input: bool = False) -> int:
@@ -217,6 +292,21 @@ async def run_servers(args: argparse.Namespace) -> int:
             print("              不可信网络下请先加 --token <口令> (手机端配对时要填同一个)")
         else:
             print("  token     : 未设置 (仅回环安全)")
+
+        # 手机端是扫码/打开链接配对的主路径, 只给个裸房间码等于让人手打五位数。
+        # 二维码里不放 token (码会被截图转发), 设了 token 就提示手填。
+        if peerjs_server is not None:
+            page = (args.page_url or guess_page_url()).rstrip("/")
+            room = next(
+                (e["room"] for e in endpoints if e["transport"] == "peerjs"), ""
+            )
+            if room:
+                print(f"  手机端    : {page}/#/{room}")
+                if args.qr:
+                    show_qr(f"{page}/#/{room}", room)
+                if token:
+                    print(f"              (设了 token: 页面上的 Token 框要填同一个)")
+
         print("  客户端示例: python -m remote.client ws ping")
         sys.stdout.flush()
 

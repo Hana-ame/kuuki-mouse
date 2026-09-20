@@ -181,5 +181,15 @@ try {
     console.log(`  skip Python 端键名检查 (跑不了 ${py}: ${e.message.split('\n')[0]})`);
 }
 
+// ---------------- 关键库不许再从 CDN 拉 ----------------
+// unpkg 在国内经常连不上, 而 <script src> 阻塞渲染 —— 卡在 CDN 上就是白屏等超时。
+// 所以 peerjs / mqtt 自托管在 web/vendor/, 文件必须真的在那儿 (光改 html 不够)。
+console.log('--- 依赖自托管 ---');
+const html = fs.readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
+for (const lib of ['vendor/peerjs.min.js', 'vendor/mqtt.min.js']) {
+    const onDisk = fs.existsSync(path.join(ROOT, 'web', lib));
+    check(`${lib} 文件在且被引用`, onDisk && html.includes(lib), true);
+}
+
 console.log(fail ? `\n${fail} 项失败` : '\n全部通过');
 process.exit(fail ? 1 : 0);

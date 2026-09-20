@@ -51,8 +51,22 @@
         </section>
     </div>
 
-    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
-    <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
-    <script src="script.js"></script>
+    <!-- 两个库都自托管在 vendor/, 不再从 unpkg 拉。
+         unpkg 在国内经常连不上/极慢, 而 <script src> 是阻塞渲染的 —— 卡在 CDN 上
+         的表现就是页面白屏等超时。peerjs 更是缺了就整个页面废 (mqtt 那个脚本自己
+         有 typeof 容错, 只是没有兜底通道)。 -->
+    <script src="vendor/peerjs.min.js"></script>
+    <script>
+        // vendor 没加载出来 (部署漏文件 / 仓库没带上) 就退回 CDN, 有网总比白屏强
+        if (typeof Peer === 'undefined') {
+            document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>');
+        }
+    </script>
+    <!-- mqtt 只是兜底通道, 用 defer 不挡着首屏; 加载失败 script.js 会自己跳过 -->
+    <script src="vendor/mqtt.min.js" defer></script>
+    <!-- 也得 defer: defer 脚本按文档顺序执行, 而普通 script 会立刻跑 ——
+         只给 mqtt 加 defer 的话 script.js 反而先执行, 那时 mqtt 还没定义,
+         connectMqtt() 直接跳过, 兜底通道就没了。 -->
+    <script src="script.js" defer></script>
 </body>
 </html>

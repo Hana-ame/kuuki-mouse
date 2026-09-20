@@ -1518,6 +1518,89 @@ def test_force_utf8_stdio_tolerates_replaced_streams():
         sys.stdout = original
 
 
+# ---------------- 传输开关 (默认只开 PeerJS) ----------------
+# 以前是"三个全开 + --no-xxx 关", 现在反过来: 默认只有 PeerJS, 想要别的得点名。
+# 这里测的是开关语义本身 —— 点名即选择, 给什么开什么; 外加"给了端口却没开对应传输"
+# 这种在旧语义下不存在、在新语义下会静默什么都不做的组合。
+
+
+def _resolve(argv):
+    """解析一条命令行 -> (开了哪些传输, 冲突提示列表)。"""
+    gate = pytest.importorskip("remote.__main__")
+    args = gate.build_parser().parse_args(argv)
+    transports = gate.resolve_transports(args)
+    return transports, gate.transport_conflicts(args, transports)
+
+
+def test_default_enables_peerjs_only():
+    """不带任何开关: 只开 PeerJS, 不占本地端口。"""
+    transports, conflicts = _resolve([])
+    assert transports == ["peerjs"]
+    assert conflicts == []
+
+
+def test_naming_a_transport_replaces_the_default():
+    """点名即选择: --ws 就是"只要 WebSocket", 不会顺带把 PeerJS 也注册到公开 broker。
+
+    这条是安全属性, 不是习惯问题 —— additive 语义 ("--ws = PeerJS + WS") 会让想只要
+    本地端口的人白白多暴露一条出站的通道出去。
+    """
+    assert _resolve(["--ws"])[0] == ["ws"]
+    assert _resolve(["--grpc"])[0] == ["grpc"]
+    assert _resolve(["--peerjs"])[0] == ["peerjs"]
+
+
+def test_transports_can_be_combined():
+    transports, _ = _resolve(["--ws", "--grpc"])
+    assert transports == ["ws", "grpc"]
+    transports, _ = _resolve(["--ws", "--peerjs"])
+    assert transports == ["ws", "peerjs"]
+    transports, _ = _resolve(["--ws", "--grpc", "--peerjs"])
+    assert transports == ["ws", "grpc", "peerjs"]
+
+
+def test_no_flags_subtract_from_the_selection():
+    """--no-xxx 是在选择结果上再减, 不是把默认加回来。"""
+    assert _resolve(["--ws", "--no-peerjs"])[0] == ["ws"]
+    assert _resolve(["--ws", "--grpc", "--no-grpc"])[0] == ["ws"]
+    # 老写法 `--no-ws --no-grpc` 恰恰等于现在的默认, 行为不变
+    assert _resolve(["--no-ws", "--no-grpc"])[0] == ["peerjs"]
+
+
+def test_port_flag_does_not_silently_do_nothing():
+    """只给 --ws-port 却没开 WebSocket: 换端口的服务根本不会起来, 必须点出来。"""
+    _, conflicts = _resolve(["--ws-port", "9000"])
+    assert any("--ws" in problem for problem in conflicts)
+    # 端口确实给了才报; 用默认值 (没手打) 不该吵
+    assert _resolve([])[1] == []
+    assert _resolve(["--ws"])[1] == []
+
+
+def test_room_without_peerjs_is_reported():
+    """同上: 指定了房间码却没开 PeerJS, 房间码就白给了。"""
+    _, conflicts = _resolve(["--ws", "--room", "ABCDE"])
+    assert any("--peerjs" in problem for problem in conflicts)
+
+
+def test_main_refuses_when_every_transport_is_off(monkeypatch, capsys):
+    """一个传输都没开: 拒绝启动 (退出码 2), 而不是起一个什么都不监听的空壳。"""
+    gate = pytest.importorskip("remote.__main__")
+    # 平台门禁单独测过了, 这里只想看传输选择那一层 —— 免得非 Windows 上被它挡掉
+    monkeypatch.setattr(gate, "platform_refusal", lambda *a, **k: None)
+    assert gate.main(["--no-peerjs"]) == 2
+    captured = capsys.readouterr()
+    assert "一个传输都没开" in captured.out + captured.err
+
+
+def test_main_reports_conflicting_transport_args(monkeypatch, capsys):
+    """端口参数对不上的时候要在启动前就红, 不能让人对着一个不存在的端口排查。"""
+    gate = pytest.importorskip("remote.__main__")
+    monkeypatch.setattr(gate, "platform_refusal", lambda *a, **k: None)
+    assert gate.main(["--ws-port", "9000"]) == 2
+    captured = capsys.readouterr()
+    assert "--ws" in captured.out + captured.err
+
+
 # ---------------- notify (角标通知) ----------------
 # 打包后的 exe 排除了 tkinter, 所以这条路在分发版上是走不通的 —— 必须报明确的
 # unsupported, 而不是返回 shown=false 让人以为弹了。之前这个 op 一条测试都没有。

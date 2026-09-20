@@ -1,11 +1,12 @@
 """``kuuki-agent.exe`` 的 PyInstaller 入口。
 
-等价于源码运行时的 ``python -m remote`` —— 受控端 (被操作的那台机器) 的三传输服务:
-WebSocket / gRPC / PeerJS 全开。命令行参数与 ``python -m remote`` 完全一致::
+等价于源码运行时的 ``python -m remote`` —— 受控端 (被操作的那台机器) 的三种传输
+(WebSocket / gRPC / PeerJS), **默认只开 PeerJS**, 其余按需 ``--ws`` / ``--grpc`` 开启。
+命令行参数与 ``python -m remote`` 完全一致::
 
-    kuuki-agent.exe
+    kuuki-agent.exe                     # 只开 PeerJS (默认)
+    kuuki-agent.exe --ws --grpc         # 本机两个端口
     kuuki-agent.exe --token secret --allow-remote
-    kuuki-agent.exe --no-peerjs
     kuuki-agent.exe --selftest
 
 为什么单独要一个入口文件, 而不是直接拿 ``remote/__main__.py`` 当脚本:

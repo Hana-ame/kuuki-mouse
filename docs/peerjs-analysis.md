@@ -114,7 +114,7 @@ EXIT=0
 想用**真**屏幕 + 真受控端走这条路，就按 runbook 那套来：
 
 ```bash
-python -m remote                                  # 不带 --no-peerjs, 会打印房间码
+python -m remote                                  # 默认就开 PeerJS, 会打印房间码
 python -m remote.ctl machines add me --transport peerjs --endpoint kuuki-mouse-XXXXX
 python -m remote.ctl ping me                      # 握手是否在 30s 内完成
 python -m remote.ctl shot shot.png -t me          # 大响应分块全到了吗

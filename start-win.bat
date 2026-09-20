@@ -13,12 +13,13 @@ REM
 REM 首次准备:
 REM   E:\Python310\python.exe -m venv .venv-win
 REM   .venv-win\Scripts\python.exe -m pip install pynput Pillow websockets grpcio protobuf
+REM                                                        ^^^^^^ ^^^^^^^^ 只有 --grpc 才需要
 REM
-REM 用法:
-REM   start-win.bat                     默认: WS 8765 + gRPC 50051 (PeerJS 也开)
-REM   start-win.bat --no-grpc           只要 WS + PeerJS
-REM   start-win.bat --token secret      三个传输都要求 token
-REM   start-win.bat --no-ws --no-grpc   只开 PeerJS (房间码配对, 不需要端口)
+REM 用法 (三种传输按需开, 默认只开 PeerJS):
+REM   start-win.bat                     默认: 只开 PeerJS (房间码配对, 不需要端口)
+REM   start-win.bat --ws --grpc         本机两个端口: WS 8765 + gRPC 50051
+REM   start-win.bat --ws --peerjs       WS + PeerJS
+REM   start-win.bat --token secret      所有已开的传输都要 token
 
 setlocal
 cd /d "%~dp0"

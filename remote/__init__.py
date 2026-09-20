@@ -19,8 +19,8 @@
 
 快速开始::
 
-    python -m remote                  # 三个传输全开: WS 8765 + gRPC 50051 + PeerJS
-    python -m remote --no-peerjs      # 只要本机两个端口
+    python -m remote                  # 默认只开 PeerJS (房间码配对, 不需要端口)
+    python -m remote --ws --grpc      # 本机两个端口: WS 8765 + gRPC 50051
     python -m remote.client ws ping
     python -m remote.client ws screenshot shot.png
 """

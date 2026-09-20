@@ -1,20 +1,29 @@
-"""``python -m remote`` —— 默认同时启动 WebSocket、gRPC 与 PeerJS 三个传输。
+"""``python -m remote`` —— WebSocket / gRPC / PeerJS 三种传输按需开启, **默认只开 PeerJS**。
 
 **受控端只支持 Windows** —— 这是产品定位, 不是临时限制。非 Windows 上会在启动前直接
 拒绝 (退出码 2), 见 :func:`platform_refusal`。WSL / Linux / 手机侧只跑**客户端**, 连到
 Windows 上的服务端; 想从 WSL 里控制 Windows 桌面见 ``remote/win/``。
 
-默认**只绑 127.0.0.1**; 要给别的机器用必须显式 ``--allow-remote`` 且设置 token。
-PeerJS 不需要本地端口 —— 它注册到公开 broker, 靠房间码配对。
+**为什么默认只开 PeerJS**: 它连公开 broker、靠房间码配对, 不需要本地端口、不需要
+防火墙放行, 拿起来就能用; WS / gRPC 要占端口并把端口暴露出去, 属于"要了才给"的东西,
+不该在用户没开口时就默认占上。
 
-    python -m remote                          # WS 8765 + gRPC 50051 + PeerJS (默认全开)
-    python -m remote --no-peerjs              # 只开 WS + gRPC 两个本地端口
-    python -m remote --no-grpc --no-peerjs    # 只开 WebSocket
-    python -m remote --no-ws --no-grpc        # 只开 PeerJS (靠房间码配对, 不需要端口)
-    python -m remote --ws-port 9000 --grpc-port 9001
-    python -m remote --token secret           # 三个传输都要求 token
+开关语义 (见 :func:`resolve_transports`): **给了任何一个开启开关就以给的那几个为准**
+—— ``--ws`` 就是"只要 WebSocket", 不会顺带把 PeerJS 也注册到公开 broker 上; 一个都
+没给才用默认。``--no-xxx`` 是在这个结果上再减。
+
+默认**只绑 127.0.0.1**; 要给别的机器用必须显式 ``--allow-remote`` 且设置 token。
+
+    python -m remote                       # 只开 PeerJS (默认, 房间码配对, 不需要端口)
+    python -m remote --ws                  # 只开 WebSocket 8765
+    python -m remote --grpc                # 只开 gRPC 50051
+    python -m remote --ws --grpc           # 本机两个端口, 不连公开 broker
+    python -m remote --ws --peerjs         # WebSocket + PeerJS
+    python -m remote --ws --grpc --peerjs  # 三个全开
+    python -m remote --ws --ws-port 9000   # 换端口 (端口参数不会替你把传输打开)
+    python -m remote --token secret        # 所有已开的传输都要 token
     python -m remote --allow-remote --token secret   # 绑 0.0.0.0 (危险, 必须带 token)
-    python -m remote --selftest               # 只做自检: 报告后端 + 抓一帧, 不动鼠标
+    python -m remote --selftest            # 只做自检: 报告后端 + 抓一帧, 不动鼠标
     python -m remote --selftest --selftest-input     # 额外测一次鼠标移动(会动光标)
 """
 
@@ -32,7 +41,9 @@ import sys
 if __package__ in (None, ""):  # pragma: no cover
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from remote.grpc_server import GrpcServer  # noqa: E402
+# GrpcServer **故意不在这里 import**: remote/grpc_server.py 顶层就要 grpc, 而 grpcio
+# 连 requirements.txt 里都没写 (只有真要用 gRPC 才需要装)。顶层 import 会让"只开
+# PeerJS 的默认用法"因为没装 grpcio 直接 ImportError —— 所以挪到真要开 gRPC 时再导。
 from remote.peerjs_server import PeerJsServer  # noqa: E402
 from remote.service import RemoteError, RemoteService, VERSION  # noqa: E402
 from remote.ws_server import WsServer  # noqa: E402
@@ -72,23 +83,57 @@ def platform_refusal(platform: str | None = None) -> str | None:
     )
 
 
+#: 默认开启的传输。只开 PeerJS 的理由见模块 docstring: 它不需要本地端口, 而 WS/gRPC
+#: 一旦开了就占端口、要防火墙放行, 属于"要了才给"。
+DEFAULT_TRANSPORTS = ("peerjs",)
+
+#: 展示/启动顺序。WebSocket 与 gRPC 是本地端口 (放前面), PeerJS 是出站的 (放后面)。
+TRANSPORT_ORDER = ("ws", "grpc", "peerjs")
+
+
+class _RememberPort(argparse.Action):
+    """记下"这个端口参数用户真的手打过"。
+
+    光看值分不出 ``--ws-port 8765`` 里的 8765 是默认值还是用户给的 —— 但"给了端口
+    却没开对应传输"一定是手误 (换了端口结果服务没起来), 要点出来而不是静默忽略。
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+        setattr(namespace, f"{self.dest}_explicit", True)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m remote",
         description=(
             "kuuki-mouse 远程控制扩展: 鼠标/键盘控制 + 截屏, "
-            "暴露 WebSocket / gRPC / PeerJS 三种传输 (受控端只支持 Windows)"
+            "WebSocket / gRPC / PeerJS 三种传输按需开启, 默认只开 PeerJS "
+            "(受控端只支持 Windows)"
         ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.set_defaults(ws_port_explicit=False, grpc_port_explicit=False)
     parser.add_argument("--host", default="127.0.0.1", help="监听地址")
-    parser.add_argument("--ws-port", type=int, default=8765, help="WebSocket 端口")
-    parser.add_argument("--grpc-port", type=int, default=50051, help="gRPC 端口")
+    parser.add_argument(
+        "--ws", action="store_true",
+        help="开启 WebSocket (默认不开; 给了任何传输开关就以给的为准)",
+    )
+    parser.add_argument(
+        "--grpc", action="store_true",
+        help="开启 gRPC (默认不开; 需要装 grpcio)",
+    )
+    parser.add_argument(
+        "--peerjs", action="store_true",
+        help="开启 PeerJS (默认就开着; 走 0.peerjs.com 公开 broker, 无需端口/域名)",
+    )
+    parser.add_argument("--ws-port", action=_RememberPort, type=int, default=8765, help="WebSocket 端口")
+    parser.add_argument("--grpc-port", action=_RememberPort, type=int, default=50051, help="gRPC 端口")
     parser.add_argument("--no-ws", action="store_true", help="不开 WebSocket")
     parser.add_argument("--no-grpc", action="store_true", help="不开 gRPC")
     parser.add_argument(
         "--no-peerjs", action="store_true",
-        help="不开 PeerJS (默认开; 走 0.peerjs.com 公开 broker, 无需端口/域名)",
+        help="不开 PeerJS (默认开; 关了就只剩本地端口这几种连法)",
     )
     parser.add_argument("--room", default=None, help="PeerJS 房间码 (默认随机生成)")
     parser.add_argument(
@@ -122,6 +167,58 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"kuuki remote {VERSION}")
     return parser
+
+
+def resolve_transports(args: argparse.Namespace) -> list:
+    """把命令行开关解析成"这次要开哪些传输", 按 :data:`TRANSPORT_ORDER` 排序返回。
+
+    语义是**枚举即选择**: 给了任何一个 ``--ws/--grpc/--peerjs`` 就以给的那几个为准,
+    一个都没给才退回 :data:`DEFAULT_TRANSPORTS`。这样 ``--ws`` 就是"只要 WebSocket",
+    不会顺带把 PeerJS 也注册到公开 broker 上 —— 多开一条出站的通道不该是默认行为,
+    而 additive 语义 ("--ws = PeerJS + WS") 会让想只要本地端口的人白白暴露出去。
+
+    ``--no-xxx`` 是在这个结果上再减, 所以 ``--ws --no-peerjs`` 依旧是"只要 WebSocket",
+    ``--no-peerjs`` 单独用则什么都不剩 (由 :func:`main` 拦下来)。
+    """
+    enabled = {name for name in TRANSPORT_ORDER if getattr(args, name, False)}
+    if not enabled:
+        enabled = set(DEFAULT_TRANSPORTS)
+    for name in TRANSPORT_ORDER:
+        if getattr(args, f"no_{name}", False):
+            enabled.discard(name)
+    return [name for name in TRANSPORT_ORDER if name in enabled]
+
+
+def transport_conflicts(args: argparse.Namespace, transports: list) -> list:
+    """找出"给了某传输的专属参数, 但那个传输没开"的组合。
+
+    这类组合在开关语义下会**静默什么都不做** —— 用户换了端口、指定了房间码, 服务却
+    没起来, 而且没有任何提示 (改默认之前不存在这个问题, 因为三个都是开的)。宁可启动时
+    报错, 也别让人对着一个不存在的端口排查半天。
+    """
+    problems = []
+    if args.ws_port_explicit and "ws" not in transports:
+        problems.append("--ws-port 只在 WebSocket 开启时有效: 要再加 --ws")
+    if args.grpc_port_explicit and "grpc" not in transports:
+        problems.append("--grpc-port 只在 gRPC 开启时有效: 要再加 --grpc")
+    if args.room and "peerjs" not in transports:
+        problems.append("--room 只在 PeerJS 开启时有效: 要再加 --peerjs")
+    return problems
+
+
+def empty_transport_refusal() -> str:
+    """一个传输都没开时的拒绝说明 (退出码 2)。"""
+    return (
+        "拒绝启动: 一个传输都没开 (默认只开 PeerJS, 被 --no-peerjs 关掉了)。\n"
+        "\n"
+        "  挑一个开:\n"
+        "      python -m remote              # 只开 PeerJS (默认, 房间码配对)\n"
+        "      python -m remote --ws         # 只开 WebSocket 8765\n"
+        "      python -m remote --grpc       # 只开 gRPC 50051\n"
+        "      python -m remote --ws --grpc  # 本机两个端口\n"
+        "\n"
+        "  开关语义: 给了任何 --ws/--grpc/--peerjs 就以给的那几个为准, --no-xxx 再减。"
+    )
 
 
 #: git remote 也认不出来时的兜底 (本仓库 fork 后地址会变, 所以能推断就推断)
@@ -240,7 +337,7 @@ def selftest(service: RemoteService, with_input: bool = False) -> int:
     return 0 if ok else 1
 
 
-async def run_servers(args: argparse.Namespace) -> int:
+async def run_servers(args: argparse.Namespace, transports: list) -> int:
     token = args.token
     if args.allow_remote and not token:
         print("拒绝启动: --allow-remote 必须同时提供 --token", file=sys.stderr)
@@ -254,13 +351,16 @@ async def run_servers(args: argparse.Namespace) -> int:
     grpc_server = None
     peerjs_server = None
 
-    if not args.no_ws:
+    if "ws" in transports:
         ws_server = WsServer(service, host=host, port=args.ws_port, token=token, max_fps=args.max_fps)
         await ws_server.start()
-    if not args.no_grpc:
+    if "grpc" in transports:
+        # 惰性导入: 见文件头 —— 没开 gRPC 就不该要求装 grpcio
+        from remote.grpc_server import GrpcServer
+
         grpc_server = GrpcServer(service, host=host, port=args.grpc_port, token=token)
         grpc_server.start()
-    if not args.no_peerjs:
+    if "peerjs" in transports:
         # PeerJS 不需要本地端口 —— 它注册到公开 broker, 靠房间码配对
         peerjs_server = PeerJsServer(service, room=args.room, token=token)
         await peerjs_server.start()
@@ -303,6 +403,11 @@ async def run_servers(args: argparse.Namespace) -> int:
         else:
             print("  token     : 未设置 (仅回环安全)")
 
+        # --allow-remote 只管本地端口绑哪儿; 只开 PeerJS 时它没有任何作用。不点出来
+        # 的话, 用户会以为自己已经"放行远程"了, 然后对着连不上的 ws:// 排查半天。
+        if args.allow_remote and ws_server is None and grpc_server is None:
+            print("  注意      : --allow-remote 只影响本地端口, 这次没开 WS/gRPC, 它不起作用")
+
         # 手机端是扫码/打开链接配对的主路径, 只给个裸房间码等于让人手打五位数。
         # 二维码里不放 token (码会被截图转发), 设了 token 就提示手填。
         if peerjs_server is not None:
@@ -317,7 +422,14 @@ async def run_servers(args: argparse.Namespace) -> int:
                 if token:
                     print(f"              (设了 token: 页面上的 Token 框要填同一个)")
 
-        print("  客户端示例: python -m remote.client ws ping")
+        # 示例要给一条**这次真能跑通**的命令 —— 默认只开 PeerJS 时还说 `ws ping`
+        # 是拿一条连不上的命令当指引。
+        if ws_server is not None:
+            print("  客户端示例: python -m remote.client ws ping")
+        elif grpc_server is not None:
+            print("  客户端示例: python -m remote.client grpc ping")
+        elif peerjs_server is not None:
+            print(f"  客户端示例: python -m remote.client peerjs --peer {peerjs_server.peer_id} ping")
         sys.stdout.flush()
 
     stop = asyncio.Event()
@@ -361,8 +473,22 @@ def main(argv=None) -> int:
     )
     if args.selftest:
         return selftest(RemoteService(token=args.token), args.selftest_input)
+
+    # 传输选择排在 --selftest 之后: 自检不起服务, 开哪几个传输跟它无关, 不该因为
+    # 带了 --no-peerjs 就让人连自检都做不了。
+    transports = resolve_transports(args)
+    if not transports:
+        print(empty_transport_refusal(), file=sys.stderr)
+        return 2
+    conflicts = transport_conflicts(args, transports)
+    if conflicts:
+        print(f"拒绝启动: 参数对不上 (这次开的传输: {', '.join(transports)})", file=sys.stderr)
+        for problem in conflicts:
+            print(f"  - {problem}", file=sys.stderr)
+        return 2
+
     try:
-        return asyncio.run(run_servers(args))
+        return asyncio.run(run_servers(args, transports))
     except KeyboardInterrupt:  # pragma: no cover
         print("\n已退出。")
         return 0

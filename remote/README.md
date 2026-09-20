@@ -47,13 +47,15 @@ pip install -r requirements.txt -r requirements-remote.txt
 ## 2. 启动
 
 ```bash
-python -m remote                          # 三个传输全开: WS 8765 + gRPC 50051 + PeerJS
-python -m remote --no-peerjs              # 只要本机两个端口 (不连公开 broker)
-python -m remote --no-grpc                # WebSocket + PeerJS
-python -m remote --no-ws --no-grpc        # 只要 PeerJS (房间码配对, 不需要端口)
-python -m remote --ws-port 9000 --grpc-port 9001
+python -m remote                          # 默认只开 PeerJS (房间码配对, 不需要端口)
+python -m remote --ws                     # 只开 WebSocket 8765
+python -m remote --grpc                   # 只开 gRPC 50051
+python -m remote --ws --grpc              # 本机两个端口 (不连公开 broker)
+python -m remote --ws --peerjs            # WebSocket + PeerJS
+python -m remote --ws --grpc --peerjs     # 三个全开
+python -m remote --ws --ws-port 9000 --grpc --grpc-port 9001
 python -m remote --room ABCD123           # 指定 PeerJS 房间码 (默认随机生成)
-python -m remote --token secret           # 三个传输都要求 token
+python -m remote --token secret           # 所有已开的传输都要求 token
 python -m remote --allow-remote --token secret   # 绑 0.0.0.0 (必须带 token)
 python -m remote --selftest               # 自检: 报告环境 + 抓一帧, 不动鼠标
 python -m remote --selftest --selftest-input     # 额外测一次鼠标移动(会动光标)
@@ -145,7 +147,7 @@ python -m remote.ctl move self 400 300 --duration .3
 **实操手册**: [docs/ctl-selfhost-runbook.md](../docs/ctl-selfhost-runbook.md) ——
 记录 / 注意事项 (含踩过的坑) / 从零复现本机自控的 8 步指南。想上手照抄命令就翻它。
 
-> 2026-09-20 本机自控实测: 起一个 `python -m remote --no-peerjs`, 注册成 WS 与 gRPC
+> 2026-09-20 本机自控实测: 起一个 `python -m remote --ws --grpc`, 注册成 WS 与 gRPC
 > 两个别名, ping / info / 光标 / 键预检 / 截屏 / 连续抓帧全部通过。
 
 ### 3.3 没有真设备时: `python -m remote.dummy`
@@ -231,7 +233,7 @@ PeerJS 不是一个"端口", 而是两端各自连 broker、由 broker 牵线:
 
 ```
  被控端 (要操作的那台机器)              控制端 (发起方)
-   python -m remote --no-ws --no-grpc      PeerJsClient("kuuki-mouse-<房间码>")
+   python -m remote                        PeerJsClient("kuuki-mouse-<房间码>")
         │                                        │
         └────────► 0.peerjs.com:443 ◄────────────┘
               (只做牵线, 数据走 P2P)
@@ -244,13 +246,13 @@ PeerJS 不是一个"端口", 而是两端各自连 broker、由 broker 牵线:
 
 | 想控制谁 | 服务端跑在哪 | 控制端跑在哪 |
 |---|---|---|
-| **Windows 桌面** | **必须**是 Windows (`start-win.bat --no-ws --no-grpc`) | WSL / Linux / 手机 / 任何地方 |
+| **Windows 桌面** | **必须**是 Windows (`start-win.bat`) | WSL / Linux / 手机 / 任何地方 |
 
 控制端不挑平台 —— 它只发起出站连接, 不碰自己的桌面。
 
 ```bash
 # 被控端 (Windows): 只开 PeerJS, 打印房间码, 不需要任何端口
-start-win.bat --no-ws --no-grpc --room ABCDE
+start-win.bat --room ABCDE
 
 # 控制端 (WSL / Linux / 异地 / 手机): 连过去
 python -m remote.client peerjs --peer kuuki-mouse-ABCDE op mouse.position
@@ -447,7 +449,7 @@ zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstalle
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 103 项 (含参数化; 15 项专测控制端, 13 项专测 PeerJS)
+python -m pytest test_remote.py -v      # 111 项 (含参数化; 15 项专测控制端, 13 项专测 PeerJS)
 python -m remote --selftest --selftest-input
 ```
 
@@ -456,7 +458,7 @@ python -m remote --selftest --selftest-input
 - 测试套 **32 passed / 1 skipped** (跳过的是 Linux/X11 专用的键预检用例)。
   P3 控制端落地后是 **57 passed / 1 skipped** (新增 registry、目标解析、分发汇总、
   命令翻译与端到端 15 项)。
-- 受控端正常启动 (`python -m remote --no-grpc --no-peerjs --ws-port 8766`),
+- 受控端正常启动 (`python -m remote --ws --ws-port 8766`),
   客户端 `python -m remote.client ws --url ws://127.0.0.1:8766 ping` 与同一命令换 `info`
   端到端都通, `info` 报 `os=Windows` / `clipboard_tool=clip`。
 - 平台门禁: 伪装成非 Windows 时 `main()` 返回 2 并在 stderr 给出提示 (`--selftest` 同样被拦);

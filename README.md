@@ -39,9 +39,10 @@
 
 ```bash
 pip install -r requirements.txt -r requirements-remote.txt
-python -m remote                     # 默认三个一起起: WS 8765 + gRPC 50051 + PeerJS 房间码
-python -m remote --no-peerjs         # 只要本机两个端口, 不连公开 broker
-python -m remote --no-ws --no-grpc   # 只开 PeerJS (不需要任何开放端口)
+python -m remote                     # 默认只开 PeerJS: 房间码配对, 不需要任何开放端口
+python -m remote --ws --grpc         # 本机两个端口: WS 8765 + gRPC 50051 (不连公开 broker)
+python -m remote --ws --peerjs       # WebSocket + PeerJS
+python -m remote --ws --grpc --peerjs  # 三个全开
 python -m remote --room ABCD123      # 指定 PeerJS 房间码 (默认随机生成)
 python -m remote --qr                # 额外打印配对二维码 (启动本来就会给配对链接)
 python -m remote --selftest          # 自检: 报告截屏后端 + 抓一帧 (不动鼠标)
@@ -189,7 +190,7 @@ remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键�
   ├─ peerjs_selftest.py  PeerJS 真机自检 (连公开 broker; 假屏幕假输入, 不动真实光标)
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
-test_remote.py   remote/ 扩展的测试 (103 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端/PeerJS 回环用例)
+test_remote.py   remote/ 扩展的测试 (111 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端/PeerJS 回环用例)
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机, P1-P3/P6 已落地)

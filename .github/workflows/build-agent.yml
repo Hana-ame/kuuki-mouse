@@ -150,7 +150,7 @@ jobs:
           # -e 必须有: 缺了它, 中间任何断言失败都会被吞掉, 只有最后一条命令说了算
           set -euo pipefail
           EXE=dist/kuuki-agent/kuuki-agent.exe
-          "$EXE" --no-peerjs --ws-port 18765 --grpc-port 50052 > agent_e2e.log 2>&1 &
+          "$EXE" --ws --grpc --ws-port 18765 --grpc-port 50052 > agent_e2e.log 2>&1 &
           pid=$!
           trap 'kill $pid 2>/dev/null || true' EXIT
           for i in $(seq 1 30); do
@@ -193,7 +193,8 @@ jobs:
         run: |
           set -euo pipefail
           EXE=dist/kuuki-agent/kuuki-agent.exe
-          "$EXE" --no-ws --no-grpc --json > peerjs_smoke.log 2>&1 &
+          # --peerjs 写不写都一样 (它就是默认), 但 CI 日志里写明白更好读
+          "$EXE" --peerjs --json > peerjs_smoke.log 2>&1 &
           pid=$!
           for i in $(seq 1 45); do
             if grep -q 'kuuki-mouse-' peerjs_smoke.log 2>/dev/null; then break; fi

@@ -126,7 +126,7 @@ CI 的干净环境一跑就露馅: `check_bundle.py` 报 `MISS aiohttp`, 模块�
 - 构建 41 秒, 856 个模块, 产物 124 MB
 - `--version` → `kuuki remote 0.1.0`
 - `--selftest` → `PASS`, 截屏 1680x1050 / 241 144 字节 / 274 ms, PNG 魔数正确
-- `--no-ws --no-grpc` → 3 秒注册到公开 broker, 房间码 `kuuki-mouse-7DSGJ`
+- 默认启动 (只开 PeerJS) → 3 秒注册到公开 broker, 房间码 `kuuki-mouse-7DSGJ`
   (这条最关键: 证明 peerjs + aiortc + av + aioice 一整套 WebRTC 栈都真的进去了)
 - `check_bundle.py` → 4 组 26/26 全命中
 
@@ -136,7 +136,7 @@ CI 的干净环境一跑就露馅: `check_bundle.py` 报 `MISS aiohttp`, 模块�
 - 四层冒烟全部通过, 包括两层"看环境脸色"的:
   - `--selftest` → `PASS`, 截屏 **1024x768** / 215 128 字节 / 198 ms
     (runner 有桌面会话, 能真抓屏 —— 比预期强)
-  - `--no-ws --no-grpc` → **1.2 秒**注册到公开 broker, 房间码 `kuuki-mouse-R93SG`
+  - 默认启动 (只开 PeerJS) → **1.2 秒**注册到公开 broker, 房间码 `kuuki-mouse-R93SG`
 
 注: 本机 856 / CI 866 的差值来自 Python 版本 (3.10 vs 3.11) 与 stdin 的模块集合差异,
 不是缺件 —— `check_bundle.py` 的 26 项必需模块两边都全命中。

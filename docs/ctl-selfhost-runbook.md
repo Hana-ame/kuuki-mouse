@@ -56,7 +56,7 @@
 
 ### 1.3 实测结果（本机自控）
 
-受控端 `python -m remote --no-peerjs`（WS 8765 + gRPC 50051），把 `127.0.0.1` 注册成 `self`(WS) 与 `self-grpc`(gRPC)，同组 `local`：
+受控端 `python -m remote --ws --grpc`（WS 8765 + gRPC 50051），把 `127.0.0.1` 注册成 `self`(WS) 与 `self-grpc`(gRPC)，同组 `local`：
 
 | 命令 | 实测结果 |
 |---|---|
@@ -183,10 +183,10 @@ $PY -m remote --selftest                        # 期望: 自检通过 (不启�
 netstat -ano | grep -E "8765|50051"             # 期望: 空; 有占用则 taskkill /F /PID <pid>
 ```
 
-### Step 1 · 起受控端（WS + gRPC，关 PeerJS）
+### Step 1 · 起受控端（WS + gRPC）
 
 ```bash
-$PY -u -m remote --no-peerjs
+$PY -u -m remote --ws --grpc
 ```
 
 另开一个终端确认端口：
@@ -350,7 +350,7 @@ wait
 
 ### 对应的测试
 
-`test_remote.py` 里 13 项（合计 103 passed / 1 skipped），全部不碰真实光标：
+`test_remote.py` 里 13 项（合计 111 passed / 1 skipped），全部不碰真实光标：
 
 | 测试 | 验的是什么 |
 |---|---|
@@ -472,7 +472,7 @@ registry（`C:\Users\lumin\.kuuki\registry.json`）里留着 `self` / `self-grpc
 | `docs/puppet-multi-machine.md` | 多机方案总纲（第 4 节控制端命令表，第 9 节踩过的坑） |
 | `remote/README.md` | remote 扩展完整文档（3.1 单机调试级 `remote.client`，3.2 多机控制级 `remote.ctl`） |
 | `remote/ctl.py` | 控制端实现，命令 → op 的翻译集中在 `_machine_op()` |
-| `test_remote.py` | 103 项测试，含控制端与 PeerJS 的端到端用例 |
+| `test_remote.py` | 111 项测试，含控制端与 PeerJS 的端到端用例 |
 | `remote/peerjs_selftest.py` | PeerJS 真机自检（连公开 broker，假屏幕假输入） |
 | `check_ctl_docs.py` | 校验文档代码块中的命令是否还被 parser 认得 |
 

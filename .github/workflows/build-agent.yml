@@ -201,7 +201,12 @@ jobs:
       - name: 打包 zip
         shell: pwsh
         run: |
-          Compress-Archive -Path dist/kuuki-agent -DestinationPath kuuki-agent-windows-x64.zip
+          # 带一份说明进去: 拿到 zip 的人往往是"被操作的那台机器"的使用者, 那边通常
+          # 没 Python 也不看仓库, 没有这几行就不知道 exe 该怎么起。
+          # 说明写在上游文件里而不是内联 —— PowerShell 的 here-string 结束标记 "@ 必须
+          # 顶格, 和 YAML 的缩进要求直接冲突, 内联是写不对的。
+          Copy-Item packaging/agent-README.txt README.txt
+          Compress-Archive -Path dist/kuuki-agent, README.txt -DestinationPath kuuki-agent-windows-x64.zip
           Get-Item kuuki-agent-windows-x64.zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
       - name: 上传产物

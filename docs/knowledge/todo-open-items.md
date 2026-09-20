@@ -38,7 +38,10 @@
   `screen.calibrate` 本身只在单屏上验过（1680×1050，残差 0.44px）。它的主要
   价值 —— 那个帧头里没有的**平移量** `origin` —— 只有多显示器（虚拟桌面原点
   可能是 (-1920, 0)）才体现得出来，本机只有一块屏，验不了。
-  另外 `screen.screenshot` 目前仍按主屏抓 —— 多屏下"抓哪块屏"还没接上
+  （2026-09-21 补：截图侧的那一半已接上 —— `screen.screenshot` 支持
+  `monitor` / `all_screens`，每帧都带 `origin`，光标与 `region` 都按它换算；
+  见 `remote/README.md` 3.1.4 与 `gui-imagegrab-primary-not-virtual.md`。
+  剩下的是 `screen.calibrate` 本身在真·多屏上跑一次。）
 - 分发相关：**代码签名**（SmartScreen 会拦未签名 exe）、**体积精简**（av 编解码器没挑过）
 
 ## 三传输其实不等价 —— 2026-09-20 全 op 核对的结果

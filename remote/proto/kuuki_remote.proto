@@ -64,6 +64,10 @@ message ScreenshotRequest {
   int32 max_height = 6;   // 等比缩到不超过该高 (0 = 不限)
   double scale = 7;       // 显式缩放系数 (0 = 不限)
   bool draw_cursor = 8;   // 把光标画成十字 (截图本身通常不含光标)
+  // 抓哪一块: 两个都不给 = 主显示器 (与 ImageGrab 默认一致)。
+  // optional 是因为 0 是合法下标 (第一块屏), 普通标量分不清"没给"与"给 0"
+  optional uint32 monitor = 9;
+  optional bool all_screens = 10;  // 抓整个虚拟桌面 (原点可能是负的)
 }
 
 message Image {
@@ -80,6 +84,12 @@ message Image {
   Point cursor = 13;
   bool has_cursor = 14;
   bool cursor_in_frame = 15;
+  // 这一帧左上角在**虚拟桌面坐标系**里的位置 (多屏时可能不是 (0,0))。
+  // 图坐标 + origin = 鼠标坐标 —— 少了它, "看图点哪里"会整体偏一整块屏。
+  Point origin = 16;
+  // 抓屏用的后端 (现在只有一个: "pillow")。WS 的 JSON 通道一直带着它, gRPC
+  // 这边漏了 —— 控制端想知道"这一帧是怎么来的"时只能得到空字符串。
+  string backend = 17;
 }
 
 message StreamScreenshotsRequest {

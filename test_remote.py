@@ -2617,3 +2617,178 @@ def test_monitors_on_real_desktop():
 
     assert [item["primary"] for item in info["monitors"]].count(True) == 1
     assert info["monitors"][info["primary_index"]]["primary"] is True
+
+
+# ================================================================ 多屏截图 (P2)
+#
+# 校准能报出 origin, 但**截图本身**也得能说清"这一帧是哪一块"。更要紧的是
+# ImageGrab.grab() 无参数调用抓的是主显示器, 不是虚拟桌面 —— 单屏看不出来,
+# 多屏时"图上的 (0,0)"和"鼠标的 (0,0)"就差了一整块屏。真机只有一块屏, 所以
+# 布局一律打桩: 只换掉 remote.monitor 的枚举与 _grab_bbox, 不碰真实显示器。
+
+#: 主屏在右、副屏在左: 虚拟桌面原点还是 (0,0), 但**主屏左上角**在 (1920,0)
+PRIMARY_ON_RIGHT = [
+    {"index": 0, "handle": 21, "device": "DISPLAY1",
+     "rect": {"left": 0, "top": 0, "width": 1920, "height": 1080},
+     "work": {"left": 0, "top": 0, "width": 1920, "height": 1040},
+     "primary": False},
+    {"index": 1, "handle": 22, "device": "DISPLAY2",
+     "rect": {"left": 1920, "top": 0, "width": 2560, "height": 1440},
+     "work": {"left": 1920, "top": 0, "width": 2560, "height": 1400},
+     "primary": True},
+]
+
+PRIMARY_ON_RIGHT_VIRTUAL = {"left": 0, "top": 0, "width": 4480, "height": 1440}
+
+
+def _fake_multiscreen(monkeypatch, screen, monitors=PRIMARY_ON_RIGHT,
+                      virtual=PRIMARY_ON_RIGHT_VIRTUAL):
+    """打桩出多显示器布局, 并记录每次抓屏用的 bbox。
+
+    ``_grab_bbox`` 是为此留的缝: 多屏布局在 CI 上造不出来, 只能把"抓哪块"换成
+    "记下 bbox + 按 bbox 造一张图"。
+    """
+    from PIL import Image
+
+    from remote import monitor as monitor_module
+
+    calls = []
+
+    def _list_monitors():
+        return {
+            "count": len(monitors),
+            "virtual_screen": virtual,
+            "primary_index": next(
+                (i for i, item in enumerate(monitors) if item["primary"]), None
+            ),
+            "monitors": monitors,
+        }
+
+    def _grab_bbox(box):
+        calls.append(box)
+        left, top, right, bottom = box
+        return Image.new("RGB", (right - left, bottom - top), (30, 40, 50))
+
+    monkeypatch.setattr(monitor_module, "monitor_supported", lambda: True)
+    monkeypatch.setattr(monitor_module, "list_monitors", _list_monitors)
+    monkeypatch.setattr(screen, "_grab_bbox", _grab_bbox)
+    return calls
+
+
+def test_screenshot_monitor_picks_the_asked_screen(monkeypatch):
+    """monitor=<下标> / all_screens 各自的 bbox 与 origin 都要对得上。"""
+    screen = fake_screen()
+    calls = _fake_multiscreen(monkeypatch, screen)
+
+    # 副屏 (左, 1920x1080): 它的左上角正好是虚拟桌面原点
+    capture = screen.capture(monitor=0)
+    assert capture.origin == (0, 0)
+    assert (capture.source_width, capture.source_height) == (1920, 1080)
+    assert calls[-1] == (0, 0, 1920, 1080)
+
+    # 主屏 (右, 2560x1440): 左上角不在虚拟桌面原点上 —— 这就是要报 origin 的理由
+    capture = screen.capture(monitor=1)
+    assert capture.origin == (1920, 0)
+    assert (capture.source_width, capture.source_height) == (2560, 1440)
+    assert calls[-1] == (1920, 0, 4480, 1440)
+
+    # 整个虚拟桌面
+    capture = screen.capture(all_screens=True)
+    assert capture.origin == (0, 0)
+    assert (capture.source_width, capture.source_height) == (4480, 1440)
+    assert calls[-1] == (0, 0, 4480, 1440)
+
+
+def test_screenshot_default_frame_origin_is_the_primary(monkeypatch):
+    """不给 monitor 时抓的是主屏 —— 而主屏左上角未必是虚拟桌面的 (0,0)。
+
+    这才是"图坐标 != 鼠标坐标"的根源: 漏了它, region 与光标会整体偏 1920px。
+    """
+    screen = fake_screen()
+    _fake_multiscreen(monkeypatch, screen)
+
+    capture = screen.capture()
+    # grab_image() 被 fake_screen 换成了 200x100 的假图, 但**原点**报的是主屏的
+    assert capture.origin == (1920, 0)
+    assert capture.to_dict()["origin"] == {"x": 1920, "y": 0}
+
+
+def test_screenshot_cursor_is_placed_in_frame_coordinates(monkeypatch):
+    """光标坐标是虚拟桌面坐标 —— 画到图上之前要先减掉 origin。"""
+    screen = fake_screen()
+    _fake_multiscreen(monkeypatch, screen)
+
+    # 主屏左上 + (100,50) —— 虚拟桌面坐标是 (2020, 50)
+    capture = screen.capture(draw_cursor=True, cursor_position=(2020, 50))
+    assert capture.cursor["in_frame"] is True
+    assert (capture.cursor["frame_x"], capture.cursor["frame_y"]) == (100, 50)
+
+    # 副屏上的光标 (100,50) 不在这 (主屏的) 一帧里
+    off = screen.capture(draw_cursor=True, cursor_position=(100, 50))
+    assert off.cursor["in_frame"] is False
+
+
+def test_screenshot_monitor_arguments_are_validated(monkeypatch):
+    """下标越界 / 与 all_screens 冲突都要明说, 不能悄悄退回主屏。"""
+    screen = fake_screen()
+    _fake_multiscreen(monkeypatch, screen)
+    service = RemoteService(screen=screen, controller=fake_controller()[0])
+
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.screenshot", {"monitor": 7, "include_image": False})
+    assert exc.value.code == "bad_request"
+
+    with pytest.raises(RemoteError) as exc:
+        service.handle(
+            "screen.screenshot",
+            {"monitor": 0, "all_screens": True, "include_image": False},
+        )
+    assert exc.value.code == "bad_request"
+
+
+def test_screenshot_monitor_agrees_across_transports(monkeypatch):
+    """抓哪块屏这件事, WS 与 gRPC 必须传成同一句话。
+
+    monitor 的下标 0 是合法值, 两边都得"给了才传" —— 若写成
+    ``args.get("monitor") or None``, "抓第一块屏"就变成"没给"。
+    """
+    from remote.client import GrpcClient, WsClient
+    from remote.grpc_server import GrpcServer
+
+    async def over_ws():
+        screen = fake_screen()
+        _fake_multiscreen(monkeypatch, screen)
+        service = RemoteService(screen=screen, controller=fake_controller()[0])
+        server = WsServer(service, host="127.0.0.1", port=0)
+        await server.start()
+        port = server._server.sockets[0].getsockname()[1]
+        try:
+            async with WsClient(f"ws://127.0.0.1:{port}/", timeout=20) as client:
+                return await client.call(
+                    "screen.screenshot", {"monitor": 0, "include_image": False}
+                )
+        finally:
+            await server.close()
+
+    ws_result = run(over_ws())
+
+    screen = fake_screen()
+    _fake_multiscreen(monkeypatch, screen)
+    service = RemoteService(screen=screen, controller=fake_controller()[0])
+    grpc_server = GrpcServer(service, host="127.0.0.1", port=0)
+    port = grpc_server.start()
+    try:
+        with GrpcClient(f"127.0.0.1:{port}", timeout=20) as client:
+            grpc_result = flatten(
+                client.call("screen.screenshot", {"monitor": 0, "include_image": False})
+            )
+    finally:
+        grpc_server.stop(0.5)
+
+    keys = ("origin", "width", "height", "source_width", "source_height", "backend")
+    ws_picked = {k: ws_result.get(k) for k in keys}
+    grpc_picked = {k: grpc_result.get(k) for k in keys}
+    assert ws_picked == grpc_picked, f"两条传输看到的不是同一块屏: {ws_picked} vs {grpc_picked}"
+    # 抓的是第 0 块 (左边那块副屏, 1920x1080, 原点在虚拟桌面的 (0,0))
+    assert (ws_picked["source_width"], ws_picked["source_height"]) == (1920, 1080)
+    assert ws_picked["origin"] == {"x": 0, "y": 0}

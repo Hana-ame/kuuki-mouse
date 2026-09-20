@@ -146,6 +146,12 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             args["max_height"] = int(request.max_height)
         if request.scale:
             args["scale"] = float(request.scale)
+        # monitor 的下标 0 是合法值 (第一块屏)、all_screens 的 False 也是显式给的
+        # —— 只能靠 HasField 判断"有没有给", 不能 `or 默认`
+        if request.HasField("monitor"):
+            args["monitor"] = int(request.monitor)
+        if request.HasField("all_screens"):
+            args["all_screens"] = bool(request.all_screens)
         return args
 
     def _to_image(self, capture, data: bytes) -> "pb.Image":
@@ -159,10 +165,16 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             scale=capture.scale,
             captured_at=capture.captured_at,
             duration_ms=capture.duration_ms,
+            # WS 的 JSON 通道一直带着 backend, gRPC 这里漏了 —— 同一帧走两条传输
+            # 拿到的元数据就不一样了
+            backend=capture.backend,
         )
         rect = _rect_from(capture.region.to_dict() if capture.region else None)
         if rect is not None:
             image.region.CopyFrom(rect)
+        # 多屏下 origin 不是 (0,0): 控制端要靠它把图坐标换回鼠标坐标
+        origin_x, origin_y = capture.origin
+        image.origin.CopyFrom(pb.Point(x=int(origin_x), y=int(origin_y)))
         if capture.cursor:
             image.has_cursor = True
             image.cursor_in_frame = bool(capture.cursor.get("in_frame"))

@@ -252,8 +252,34 @@ python -m remote.client ws monitors --x -100 --y 500    # 只问: 这个点在�
   点不在任何一块屏上时报错 `not_found`, 不猜一个。
 - 非 Windows 受控端直接回 `unsupported` —— 不给假屏幕。
 - **只做只读枚举**: 不改显示器排列, 也不动进程的 DPI 感知状态 (那是有副作用的
-  全局设置)。多显示器下"截图该抓哪块屏"是下一件事, 目前 `screen.screenshot` 仍
-  按主屏抓。
+  全局设置)。知道边界之后, "截图该抓哪块屏" 见 3.1.4。
+
+### 3.1.4 多显示器下抓哪一屏: `monitor` / `all_screens` + `origin`
+
+`PIL.ImageGrab.grab()` **无参数调用抓的是主显示器, 不是整个虚拟桌面** (它走的是
+`SM_CXSCREEN`)。单屏机器上两者一样, 所以这个区别很容易被忽略; 多屏时它意味着
+"图上的 (0,0)" 未必是 "鼠标的 (0,0)" —— 差的那一截就是下面这个 `origin`:
+
+```bash
+python -m remote.client ws screenshot a.png                 # 默认: 主显示器
+python -m remote.client ws screenshot b.png --monitor 1     # 只抓第 1 块屏
+python -m remote.client ws screenshot c.png --all-screens   # 抓整个虚拟桌面
+python -m remote.client ws op screen.screenshot --args '{"include_image": false}'
+```
+
+```json
+{"format": "png", "width": 1680, "height": 1050,
+ "source_width": 1680, "source_height": 1050,
+ "origin": {"x": 0, "y": 0}, "backend": "pillow", "...": "..."}
+```
+
+- `origin` = 这一帧左上角在**虚拟桌面坐标系**里的位置 (就是鼠标坐标那一套)。
+  **图坐标 + origin = 鼠标坐标** —— `region` 与画上去的光标都按这个换算,
+  少了它会整体偏一整块屏。
+- `monitor=<下标>` 与 `all_screens` 只能给一个; 下标越界、两个都给都报
+  `bad_request`, 不悄悄退回主屏。下标 `0` 是合法值 (第一块屏), 所以 proto 里
+  这两个字段都是 `optional` —— 普通标量分不清"没给"与"给 0"。
+- `region` 一律是**帧内坐标** (相对这一帧的左上角), 不是虚拟桌面坐标。
 
 ### 3.2 `python -m remote.ctl` (多机控制级)
 
@@ -483,7 +509,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `screen.calibrate` *`calibrate`/`calib`* | `cols` `rows` `margin` `settle` `tolerance` `max_width` `restore` | **实测**图坐标↔鼠标坐标的换算 (`remote/calibrate.py`), 见 3.1.2。**会动鼠标**, 默认跑完挪回原位 |
 | `screen.size` *`size`* | — | 屏幕尺寸 |
 | `screen.monitors` *`monitors`/`monitor`/`screens`* | `x` `y` (都给了才是单点查询) | 显示器与虚拟桌面边界 —— 多屏校准的前置信息, 见 3.1.3。仅 Windows 受控端 |
-| `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` | 抓一帧 |
+| `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` `monitor` `all_screens` | 抓一帧。`monitor`=第几块屏 / `all_screens`=整个虚拟桌面 (都不给 = 主屏), 返回值带 `origin` (这一帧左上角在虚拟桌面坐标系里的位置), 见 3.1.4 |
 | `screen.grab` | 同上 | 同上, 强制二进制帧 —— **仅 WS** (`remote/ws_server.py` 直接处理) |
 | `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 —— **仅 WS**; gRPC 走 `StreamScreenshots` 服务端流式 |
 | `mouse.position` *`position`* | — | 当前光标 |
@@ -611,7 +637,7 @@ zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstalle
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v   # 145 passed / 1 skipped
+python -m pytest test_remote.py -v   # 156 passed / 1 skipped
                                      # 其中 29 项专测控制端, 16 项专测 PeerJS, 7 项专测 vision,
                                      # 7 项专测窗口, 12 项专测坐标校准
 python -m remote --selftest --selftest-input

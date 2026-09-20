@@ -926,6 +926,10 @@ def _add_shot_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-height", type=int, default=0)
     parser.add_argument("--draw-cursor", action="store_true")
     parser.add_argument("--region", default=None, help="left,top,width,height")
+    parser.add_argument("--monitor", type=int, default=None,
+                        help="抓第几块屏 (下标, 见 monitors 命令); 与 --all-screens 二选一")
+    parser.add_argument("--all-screens", action="store_true",
+                        help="抓整个虚拟桌面 (多屏拼起来的边界, 原点可能是负的)")
 
 
 def _shot_args(args: argparse.Namespace) -> dict:
@@ -938,6 +942,11 @@ def _shot_args(args: argparse.Namespace) -> dict:
         out["draw_cursor"] = True
     if args.region:
         out["region"] = [int(v) for v in args.region.split(",")]
+    # monitor / all_screens 是"抓哪一块": 只把真的给了的传下去 (0 是合法下标)
+    if getattr(args, "monitor", None) is not None:
+        out["monitor"] = int(args.monitor)
+    if getattr(args, "all_screens", False):
+        out["all_screens"] = True
     return out
 
 

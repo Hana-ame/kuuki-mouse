@@ -101,6 +101,7 @@
 - [calibrate: 别相信缩放系数, 把它测出来](gui-coordinate-calibration.md)
 - [落笔画线的回测: 三个必须守住的环节 (前台 / 找色板 / drag 时长)](gui-drag-drawing-verification.md)
 - [find_color 的 min_pixels 曾经错杀小目标: 面积换算的 unit 写错了](gui-find-color-area-unit.md)
+- [ImageGrab.grab() 抓的是主显示器, 不是虚拟桌面](gui-imagegrab-primary-not-virtual.md)
 - [GUI 自动化的可靠套路：截图闭环](gui-screenshot-loop-and-coordinate-scale.md)
 - [真人正在用这台电脑时，注入会互相干扰](gui-user-interference.md)
 - [验证"画在哪个位置"别用 find_color 的块中心 —— 聚成一簇时中心落在空白处](gui-vision-cluster-center-not-position.md)
@@ -127,4 +128,4 @@
 
 ---
 
-共 **66 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **67 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

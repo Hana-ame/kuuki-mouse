@@ -301,6 +301,14 @@ class RemoteService:
     # ---------------- 截屏 ----------------
     def capture(self, args: dict) -> Tuple[Capture, bytes]:
         """抓一帧, 返回 (元数据, 图片字节)。WS 二进制帧与 gRPC 都走这里。"""
+        # monitor / all_screens: 抓哪一块。索引 0 是合法值 (第一块屏), 所以只能判
+        # None, 不能 `or 默认` —— 否则"抓第一块屏"会被当成"没给"。
+        shot_kwargs: Dict[str, object] = {}
+        if args.get("monitor") is not None:
+            shot_kwargs["monitor"] = _as_int(args.get("monitor"), "monitor")
+        if args.get("all_screens") is not None:
+            shot_kwargs["all_screens"] = _as_bool(args.get("all_screens"), False)
+
         capture = self.screen.capture(
             region=args.get("region"),
             fmt=_as_str(args.get("format", args.get("fmt")), "format", "png"),
@@ -310,6 +318,7 @@ class RemoteService:
             scale=args.get("scale"),
             allow_upscale=bool(args.get("allow_upscale", False)),
             draw_cursor=bool(args.get("draw_cursor", False)),
+            **shot_kwargs,
         )
         return capture, capture.data
 

@@ -350,7 +350,7 @@ wait
 
 ### 对应的测试
 
-`test_remote.py` 里 13 项（合计 70 passed / 1 skipped），全部不碰真实光标：
+`test_remote.py` 里 13 项（合计 90 passed / 1 skipped），全部不碰真实光标：
 
 | 测试 | 验的是什么 |
 |---|---|

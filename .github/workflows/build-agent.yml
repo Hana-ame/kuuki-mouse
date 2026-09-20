@@ -72,6 +72,11 @@ jobs:
           python -c "import remote, remote.service, remote.screen, remote.input; print('remote ok', remote.VERSION)"
           python -c "import grpc, google.protobuf, websockets, PIL, pynput; print('transport ok')"
           python -c "import peerjs, aiortc, av, aioice; print('webrtc ok')"
+          # main.py 才是 README 描述的**主流程** (手机传感器 -> 空气鼠标), remote/ 是后来
+          # 加的扩展。它依赖 paho-mqtt 和 qrcode —— 全仓库只有它用这两个, 一旦从
+          # requirements 里漏掉, 要等用户来报。import 一下就能挡住 (它有 __main__ 保护,
+          # 导入没有副作用)。
+          python -c "import main; print('main ok')"
 
       - name: 准备 Node (跑 web 界面的逻辑测试)
         uses: actions/setup-node@v4

@@ -146,6 +146,7 @@ class RemoteService:
             "ping": self._op_ping,
             "info": self._op_info,
             "screen.size": self._op_screen_size,
+            "screen.monitors": self._op_screen_monitors,
             "screen.screenshot": self._op_screen_screenshot,
             "screen.calibrate": self._op_screen_calibrate,
             "mouse.position": self._op_mouse_position,
@@ -174,6 +175,9 @@ class RemoteService:
             "screenshot": "screen.screenshot",
             "capture": "screen.screenshot",
             "size": "screen.size",
+            "monitors": "screen.monitors",
+            "monitor": "screen.monitors",
+            "screens": "screen.monitors",
             "calibrate": "screen.calibrate",
             "calib": "screen.calibrate",
             "position": "mouse.position",
@@ -312,6 +316,29 @@ class RemoteService:
     def _op_screen_size(self, args: dict) -> dict:
         width, height = self.screen.screen_size()
         return {"width": width, "height": height}
+
+    def _op_screen_monitors(self, args: dict) -> dict:
+        """显示器与虚拟桌面边界 —— 多屏机器上校准/定位的前置信息。
+
+        不给 ``x``/``y`` 就是列全部; 给了就只回「这个点在哪块屏上」(点不在任何
+        一块屏上时报错, 而不是猜一个)。两种调用的返回结构一致, 调用方不必分支。
+        """
+        from . import monitor
+
+        if not monitor.monitor_supported():
+            raise RemoteError("unsupported", "显示器枚举需要被控端是 Windows")
+        x = args.get("x")
+        y = args.get("y")
+        try:
+            if x is not None and y is not None:
+                item = monitor.monitor_at(_as_int(x, "x"), _as_int(y, "y"))
+                # 单点查询不给 primary_index / virtual_screen: 两块屏的信息在这
+                # 种调用里没意义, 而 proto 的 optional 字段"没设"会被省略 ——
+                # 塞个 None 进去反而让两条传输的返回值对不上
+                return {"count": 1, "monitors": [item]}
+            return monitor.list_monitors()
+        except monitor.MonitorError as exc:
+            raise RemoteError(exc.code, exc.message)
 
     def _op_screen_screenshot(self, args: dict) -> dict:
         capture, data = self.capture(args)

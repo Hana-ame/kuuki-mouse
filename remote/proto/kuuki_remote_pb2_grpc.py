@@ -141,6 +141,11 @@ class RemoteControlStub:
                 request_serializer=kuuki__remote__pb2.KeyCheckRequest.SerializeToString,
                 response_deserializer=kuuki__remote__pb2.KeyCheckReply.FromString,
                 _registered_method=True)
+        self.Monitors = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/Monitors',
+                request_serializer=kuuki__remote__pb2.MonitorsRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.MonitorsReply.FromString,
+                _registered_method=True)
         self.ListWindows = channel.unary_unary(
                 '/kuuki.remote.v1.RemoteControl/ListWindows',
                 request_serializer=kuuki__remote__pb2.ListWindowsRequest.SerializeToString,
@@ -305,6 +310,13 @@ class RemoteControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def Monitors(self, request, context):
+        """显示器与虚拟桌面边界 (多屏校准的前置信息; 目前仅 Windows 受控端)
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListWindows(self, request, context):
         """窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
         """
@@ -445,6 +457,11 @@ def add_RemoteControlServicer_to_server(servicer, server):
                     servicer.CheckKeys,
                     request_deserializer=kuuki__remote__pb2.KeyCheckRequest.FromString,
                     response_serializer=kuuki__remote__pb2.KeyCheckReply.SerializeToString,
+            ),
+            'Monitors': grpc.unary_unary_rpc_method_handler(
+                    servicer.Monitors,
+                    request_deserializer=kuuki__remote__pb2.MonitorsRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.MonitorsReply.SerializeToString,
             ),
             'ListWindows': grpc.unary_unary_rpc_method_handler(
                     servicer.ListWindows,
@@ -1041,6 +1058,33 @@ class RemoteControl:
             '/kuuki.remote.v1.RemoteControl/CheckKeys',
             kuuki__remote__pb2.KeyCheckRequest.SerializeToString,
             kuuki__remote__pb2.KeyCheckReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def Monitors(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/Monitors',
+            kuuki__remote__pb2.MonitorsRequest.SerializeToString,
+            kuuki__remote__pb2.MonitorsReply.FromString,
             options,
             channel_credentials,
             insecure,

@@ -871,6 +871,12 @@ def build_parser() -> argparse.ArgumentParser:
     windows.add_argument("--limit", type=int, default=0, help="最多列几个 (0 = 不限)")
     windows.add_argument("--include-hidden", action="store_true")
 
+    # 显示器: 多屏机器上"截图是哪块屏 / 鼠标坐标又是哪套"必须先说清楚, 编排前
+    # 先看一眼虚拟桌面边界 (原点可以是负的)。只有 Windows 受控端实现。
+    monitors = _add_action(sub, "monitors", "列出受控端显示器与虚拟桌面边界")
+    monitors.add_argument("--x", type=int, default=None, help="只查这个点在哪块屏上")
+    monitors.add_argument("--y", type=int, default=None, help="与 --x 一起给")
+
     focus = _add_action(sub, "focus", "把受控端某个窗口切到前台")
     focus.add_argument("--hwnd", type=int, default=None, help="窗口句柄 (最可靠)")
     focus.add_argument("--title", default="", help="标题子串")
@@ -1002,6 +1008,12 @@ def _machine_op(args: argparse.Namespace) -> Tuple[str, dict]:
             "limit": args.limit,
             "include_hidden": args.include_hidden,
         }
+    if command == "monitors":
+        # 只给了 x 或 y 中的一个时按"没给"处理 —— 单点查询要两个都有意义
+        payload = {}
+        if args.x is not None and args.y is not None:
+            payload = {"x": args.x, "y": args.y}
+        return "screen.monitors", payload
     if command == "focus":
         payload: Dict[str, Any] = {"title": args.title, "process": args.process}
         if args.hwnd is not None:

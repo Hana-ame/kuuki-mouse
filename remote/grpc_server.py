@@ -546,6 +546,38 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             reply.rect.CopyFrom(rect)
         return reply
 
+    # ---------------- 显示器 ----------------
+    def Monitors(self, request, context):
+        self._check_auth(context)
+        args = {}
+        # x / y 是 optional 且 0 是合法坐标 (虚拟桌面原点就可能落在 0 上):
+        # 只给了其中一个时按"没给"处理 —— 单点查询要两个都有意义
+        if request.HasField("x") and request.HasField("y"):
+            args["x"] = int(request.x)
+            args["y"] = int(request.y)
+        with _translate(context):
+            result = self.service.handle("screen.monitors", args)
+        reply = pb.MonitorsReply(count=int(result.get("count", 0)))
+        for item in result.get("monitors") or []:
+            info = pb.MonitorInfo(
+                index=int(item.get("index", 0)),
+                handle=int(item.get("handle", 0)),
+                device=item.get("device", ""),
+                primary=bool(item.get("primary")),
+            )
+            for key in ("rect", "work"):
+                rect = _rect_from(item.get(key))
+                if rect is not None:
+                    getattr(info, key).CopyFrom(rect)
+            reply.monitors.append(info)
+        virtual = _rect_from(result.get("virtual_screen"))
+        if virtual is not None:
+            reply.virtual_screen.CopyFrom(virtual)
+        # 单点查询不给 primary_index (与 WS 侧一致: 那时它是 None)
+        if result.get("primary_index") is not None:
+            reply.primary_index = int(result["primary_index"])
+        return reply
+
     # ---------------- 被控端角标 ----------------
     def Notify(self, request, context):
         self._check_auth(context)

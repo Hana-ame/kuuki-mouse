@@ -717,6 +717,10 @@ NEW_OP_CASES = [
     # calibrate 返回值里有 fit / 残差 / 样本表一串浮点数与 optional bool —— 结构
     # 对不齐的地方会在这条用例上一次性暴露出来
     ("screen.calibrate", {"cols": 2, "rows": 2, "settle": 0, "restore": False}),
+    # monitors: 嵌套 repeated 消息 + Rect + optional 下标, 单点查询时还没有
+    # virtual / primary_index —— 这两种形态都要与 WS 侧逐字段对上
+    ("screen.monitors", {}),
+    ("screen.monitors", {"x": 100, "y": 100}),
 ]
 
 
@@ -2482,3 +2486,134 @@ def test_calibrate_op_lists_outliers_instead_of_letting_them_skew_the_fit():
     # 8 个好点决定的系数: 400 宽的屏按 200 宽抓 -> 2.0
     assert calib.ax == pytest.approx(2.0, abs=0.02)
     assert calib.count == 8
+
+
+# ================================================================ 显示器 (P2)
+#
+# 坐标校准的价值在**虚拟桌面原点不是 (0,0)** 的时候才体现出来 (副屏在左边时原点
+# 可能是 (-1920, 0)), 所以先要有"有几块屏 / 边界在哪"这一层。真机只做只读断言,
+# 多屏布局用打桩 —— 不改真实显示器排列。
+
+SAMPLE_MONITORS = [
+    {"index": 0, "handle": 11, "device": r"\.\DISPLAY1",
+     "rect": {"left": -1920, "top": 0, "width": 1920, "height": 1080},
+     "work": {"left": -1920, "top": 0, "width": 1920, "height": 1040},
+     "primary": False},
+    {"index": 1, "handle": 12, "device": r"\.\DISPLAY2",
+     "rect": {"left": 0, "top": 0, "width": 2560, "height": 1440},
+     "work": {"left": 0, "top": 0, "width": 2560, "height": 1400},
+     "primary": True},
+]
+
+
+def _fake_monitor_backend(monkeypatch, monitors=SAMPLE_MONITORS, supported=True):
+    """把 ``remote.monitor`` 的三个入口换成假实现, 并记录怎么被调用的。
+
+    打桩之后才能测"只给了一半坐标"、"点不在任何一块屏上"这类真机上造不出来
+    (或者说不该造) 的分支。
+    """
+    from remote import monitor as monitor_module
+
+    state = {"calls": []}
+    boxes = [dict(item) for item in monitors]
+
+    def _list_monitors():
+        state["calls"].append(("list",))
+        return {
+            "count": len(boxes),
+            "virtual_screen": {"left": -1920, "top": 0, "width": 4480, "height": 1440},
+            "primary_index": next(
+                (i for i, item in enumerate(boxes) if item["primary"]), None
+            ),
+            "monitors": boxes,
+        }
+
+    def _monitor_at(x, y):
+        state["calls"].append(("at", x, y))
+        for item in boxes:
+            rect = item["rect"]
+            if (rect["left"] <= x < rect["left"] + rect["width"]
+                    and rect["top"] <= y < rect["top"] + rect["height"]):
+                return dict(item)
+        raise monitor_module.MonitorError(
+            "not_found", f"坐标 ({x},{y}) 不在任何一块显示器上")
+
+    monkeypatch.setattr(monitor_module, "monitor_supported", lambda: supported)
+    monkeypatch.setattr(monitor_module, "list_monitors", _list_monitors)
+    monkeypatch.setattr(monitor_module, "monitor_at", _monitor_at)
+    return state
+
+
+def test_monitors_unsupported_is_refused(monkeypatch):
+    """非 Windows 受控端要明说不支持, 而不是返回一份假屏幕。"""
+    _fake_monitor_backend(monkeypatch, supported=False)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.monitors", {})
+    assert exc.value.code == "unsupported"
+
+
+def test_monitors_half_coordinates_falls_back_to_list(monkeypatch):
+    """只给了 x 或 y 中的一个 —— 单点查询要两个都有意义, 退化成列全部。"""
+    state = _fake_monitor_backend(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+
+    result = service.handle("screen.monitors", {"x": 100})
+    assert result["count"] == 2
+    assert state["calls"] == [("list",)]
+
+
+def test_monitors_virtual_screen_can_be_negative(monkeypatch):
+    """虚拟桌面原点可以是负的 —— 这正是"只看 screen.size 会算错"的根源。"""
+    _fake_monitor_backend(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+
+    result = service.handle("screen.monitors", {})
+    assert result["virtual_screen"] == {
+        "left": -1920, "top": 0, "width": 4480, "height": 1440,
+    }
+    # primary_index 指向真的标了 primary 的那块
+    assert result["monitors"][result["primary_index"]]["primary"] is True
+    assert result["monitors"][result["primary_index"]]["rect"]["left"] == 0
+
+    # 副屏上的点 (负坐标) 也要能问出来
+    picked = service.handle("screen.monitors", {"x": -100, "y": 500})
+    assert picked["count"] == 1
+    assert picked["monitors"][0]["index"] == 0
+
+
+def test_monitor_at_out_of_range(monkeypatch):
+    """点不在任何一块屏上要报错, 而不是猜一块返回。"""
+    _fake_monitor_backend(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.monitors", {"x": -9999, "y": 0})
+    assert exc.value.code == "not_found"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="显示器枚举只有 Windows 受控端实现")
+def test_monitors_on_real_desktop():
+    """真机只读冒烟: 至少一块屏, 虚拟桌面盖得住每一块, 主屏唯一。"""
+    from remote import monitor as monitor_module
+
+    assert monitor_module.monitor_supported() is True
+    info = monitor_module.list_monitors()
+    if not info["count"]:
+        pytest.skip("这台机器没枚举到显示器 (无会话), 不做断言")
+
+    virtual = info["virtual_screen"]
+    for item in info["monitors"]:
+        rect = item["rect"]
+        # 每块屏都必须落在虚拟桌面里 (左边可以是负的, 所以不能用 0 当下界)
+        assert rect["left"] >= virtual["left"]
+        assert rect["top"] >= virtual["top"]
+        assert (rect["left"] + rect["width"]) <= (virtual["left"] + virtual["width"])
+        assert (rect["top"] + rect["height"]) <= (virtual["top"] + virtual["height"])
+        # 工作区在整块屏之内 (可能小一圈 —— 任务栏)
+        work = item["work"]
+        assert work["width"] <= rect["width"] and work["height"] <= rect["height"]
+
+    assert [item["primary"] for item in info["monitors"]].count(True) == 1
+    assert info["monitors"][info["primary_index"]]["primary"] is True

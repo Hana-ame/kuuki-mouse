@@ -227,6 +227,34 @@ python -m remote.client ws locate --saturated --calib /tmp/calib.json --max-widt
 
 详见 `docs/knowledge/gui-coordinate-calibration.md`。
 
+### 3.1.3 `monitors`: 先说清楚有几块屏, 再谈坐标
+
+上面那条 `origin` 在多显示器上才是它存在的理由 —— 副屏排在主屏左边时虚拟桌面
+原点是**负的**, 只用 `screen.size` 换算会整体偏一整块屏。编排前先看一眼:
+
+```bash
+python -m remote.client ws monitors                     # 列全部 + 虚拟桌面边界
+python -m remote.client ws monitors --x -100 --y 500    # 只问: 这个点在哪块屏上
+```
+
+```json
+{"count": 1,
+ "virtual_screen": {"left": 0, "top": 0, "width": 1680, "height": 1050},
+ "primary_index": 0,
+ "monitors": [{"index": 0, "handle": 961028267, "device": "\\\\.\\DISPLAY20",
+               "rect": {"left": 0, "top": 0, "width": 1680, "height": 1050},
+               "work": {"left": 0, "top": 0, "width": 1680, "height": 1010},
+               "primary": true}]}
+```
+
+- `rect` 是整块屏, `work` 是去掉任务栏的工作区, 都是**虚拟桌面坐标** (可以是负数)。
+- 给了 `x`/`y` 就只回"这个点在哪块屏"; 只给其中一个按"没给"处理 (退化成列全部),
+  点不在任何一块屏上时报错 `not_found`, 不猜一个。
+- 非 Windows 受控端直接回 `unsupported` —— 不给假屏幕。
+- **只做只读枚举**: 不改显示器排列, 也不动进程的 DPI 感知状态 (那是有副作用的
+  全局设置)。多显示器下"截图该抓哪块屏"是下一件事, 目前 `screen.screenshot` 仍
+  按主屏抓。
+
 ### 3.2 `python -m remote.ctl` (多机控制级)
 
 先把机器记进 registry (`~/.kuuki/registry.json`, `--registry` 可改), 之后按**别名 / 组 / 全体**
@@ -428,7 +456,7 @@ asyncio.run(main())
 | `Screenshot(ScreenshotRequest) → Image` | 抓一帧, `data` 是图片字节 |
 | `Calibrate(CalibrateRequest) → CalibrateReply` | 实测图坐标↔鼠标坐标的换算 (见 3.1.2; reply 形状与 `screen.calibrate` 的 dict 逐字段对齐) |
 | `StreamScreenshots(StreamScreenshotsRequest) → stream Image` | **服务端流式推帧** (WS 侧要自己轮询) |
-| `GetMonitors` | 屏幕列表 |
+| `Monitors(MonitorsRequest) → MonitorsReply` | 显示器与虚拟桌面边界 (见第 6.x 节; 仅 Windows 受控端) |
 | `GetMousePosition` / `MoveMouse` / `MoveMouseRelative` | 光标 |
 | `ClickMouse` / `MouseDown` / `MouseUp` / `Scroll` / `Drag` | 鼠标动作 |
 | `TypeText` / `PressKey` / `Hotkey` / `Combo` / `HoldKey` / `PasteText` / `CheckKeys` | 键盘 |
@@ -454,7 +482,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `info` | — | 系统/屏幕/后端/剪贴板/能力清单 |
 | `screen.calibrate` *`calibrate`/`calib`* | `cols` `rows` `margin` `settle` `tolerance` `max_width` `restore` | **实测**图坐标↔鼠标坐标的换算 (`remote/calibrate.py`), 见 3.1.2。**会动鼠标**, 默认跑完挪回原位 |
 | `screen.size` *`size`* | — | 屏幕尺寸 |
-| `screen.monitors` *`monitors`* | — | 屏幕列表 (**尚未实现**, 见 `docs/puppet-multi-machine.md` 的待办) |
+| `screen.monitors` *`monitors`/`monitor`/`screens`* | `x` `y` (都给了才是单点查询) | 显示器与虚拟桌面边界 —— 多屏校准的前置信息, 见 3.1.3。仅 Windows 受控端 |
 | `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` | 抓一帧 |
 | `screen.grab` | 同上 | 同上, 强制二进制帧 —— **仅 WS** (`remote/ws_server.py` 直接处理) |
 | `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 —— **仅 WS**; gRPC 走 `StreamScreenshots` 服务端流式 |
@@ -604,11 +632,12 @@ python -m remote --selftest --selftest-input
 - **动作增强**: 多步滚动的总量守恒 (3 格 / 5 步 → 每步 1 格, 不丢余数)、
   路径点拖动整条只按一次松一次、组合键 `hold_ms`、`keyboard.hold` 长按 —— 全部用
   假鼠标/假键盘断言, 不碰真实光标与按键。
-- **三传输等价**: 14 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
+- **三传输等价**: 19 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
   边界上也一致 —— `interval=0` / `duration=0` 这类"显式给 0"与"没给"能区分开
   (proto3 普通标量做不到, 相关字段已改成 `optional`)。窗口 op 另有 7 个用例
-  (打桩后端跨传输比对, 不动真桌面), `screen.calibrate` 也在这 14 项里 ——
-  它的 proto reply 形状刻意做得与 service 返回的 dict 一致, 就是为了能逐字段比对。
+  (打桩后端跨传输比对, 不动真桌面), `screen.calibrate` 与 `screen.monitors` 也
+  在这 19 项里 —— 它们的 proto reply 形状刻意做得与 service 返回的 dict 一致,
+  就是为了能逐字段比对。
 - **窗口 op + 端到端**: `window.list` 列出真实桌面窗口 (标题/进程/pid/Z 序),
   `window.focus` 在 Code 与 msedge 之间来回切换且 `focused` / `window.foreground`
   逐一吻合。用"focus 认窗口 → 点进提问框 → paste → 帧差否证 → 回车"的**纯 repo**
@@ -633,7 +662,7 @@ python -m remote --selftest --selftest-input
 **2026-09-19 本机 (WSL2/WSLg, conda py3.12, `DISPLAY=:0`) 实测通过** —— 该路径自受控端
 限定 Windows 起不再支持, 结论保留在第 8 节:
 
-- `test_remote.py` 当时 14 项全过 (键名解析 / 区域 / 编码 / 裁剪缩放 / 光标叠加 /
+- `test_remote.py` 当时全过 (键名解析 / 区域 / 编码 / 裁剪缩放 / 光标叠加 /
   服务调度 / 请求信封与 batch / kuuki 透传 / 键预检 / WS 帧编解码 / WS 端到端 /
   gRPC 端到端含流式与鉴权失败 / PeerJS 分块协议)。
 - 真实抓屏走 ffmpeg 后端; 真实键盘用 `pynput.keyboard.Listener` (XRecord) 抓 XTEST

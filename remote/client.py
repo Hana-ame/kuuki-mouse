@@ -354,6 +354,9 @@ class GrpcClient:
             "screen.screenshot": lambda: self.stub.Screenshot(
                 self._shot_request(args), **self._kwargs()
             ),
+            "screen.monitors": lambda: self.stub.Monitors(
+                pb.MonitorsRequest(**_optional_int(args, "x", "y")), **self._kwargs()
+            ),
             "mouse.position": lambda: self.stub.GetMousePosition(empty, **self._kwargs()),
             "mouse.move": lambda: self.stub.MoveMouse(
                 pb.MoveMouseRequest(
@@ -566,6 +569,11 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     win.add_argument("--limit", type=int, default=0, help="最多列几个 (0 = 不限)")
     win.add_argument("--include-hidden", action="store_true", help="连隐藏窗口一起列")
 
+    # 显示器: 多屏机器上先看一眼虚拟桌面边界 (原点可以是负的), 再谈坐标校准
+    mon = sub.add_parser("monitors", help="列出被控端显示器与虚拟桌面边界")
+    mon.add_argument("--x", type=int, default=None, help="只查这个点在哪块屏上")
+    mon.add_argument("--y", type=int, default=None, help="与 --x 一起给")
+
     cal = sub.add_parser("calibrate", help="实测图坐标<->鼠标坐标的换算 (会动鼠标)")
     cal.add_argument("--cols", type=int, default=3, help="靶点网格列数")
     cal.add_argument("--rows", type=int, default=3, help="靶点网格行数")
@@ -645,6 +653,17 @@ def _focus_args(args: argparse.Namespace) -> dict:
     if not out["title"] and not out["process"] and "hwnd" not in out:
         raise ValueError("focus 需要 --hwnd / --title / --process 之一")
     return out
+
+
+def _monitors_args(args: argparse.Namespace) -> dict:
+    """``monitors`` 子命令 -> ``screen.monitors`` 的 args。
+
+    只给了 ``--x`` 或 ``--y`` 其中一个时按"没给"处理: 单点查询要两个都有意义,
+    而 0 是合法坐标 (虚拟桌面原点就可能落在 0 上), 不能用 ``or`` 兜底。
+    """
+    if getattr(args, "x", None) is not None and getattr(args, "y", None) is not None:
+        return {"x": args.x, "y": args.y}
+    return {}
 
 
 def _calibrate_args(args: argparse.Namespace) -> dict:
@@ -824,6 +843,19 @@ def _optional_at(args: dict) -> dict:
     return out
 
 
+def _optional_int(args: dict, *names: str) -> dict:
+    """``_optional_number`` 的 int 版: proto 里是 int32 的字段要用它。
+
+    不能直接拿 float 版本塞 int32 字段 (类型检查会拒), 也不能塞 0 —— 这里的
+    x / y 是虚拟桌面坐标, 0 是合法值 (而且副屏坐标还会是负的)。
+    """
+    out: Dict[str, int] = {}
+    for name in names:
+        if args.get(name) is not None:
+            out[name] = int(args[name])
+    return out
+
+
 def _optional_number(args: dict, *names: str) -> dict:
     """取出 args 里若干数值参数, 只把"真的给了"的写进 proto 的 optional 字段。
 
@@ -876,6 +908,10 @@ async def _run_ws(args: argparse.Namespace) -> int:
             return 0
         if args.action == "focus":
             result = await client.call("window.focus", _focus_args(args))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "monitors":
+            result = await client.call("screen.monitors", _monitors_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.action == "calibrate":
@@ -941,6 +977,10 @@ def _run_grpc(args: argparse.Namespace) -> int:
             return 0
         if args.action == "focus":
             result = client.call("window.focus", _focus_args(args))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "monitors":
+            result = client.call("screen.monitors", _monitors_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.action == "calibrate":
@@ -1035,6 +1075,10 @@ async def _run_peerjs(args: argparse.Namespace) -> int:
             return 0
         if args.action == "focus":
             result = await client.call("window.focus", _focus_args(args))
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "monitors":
+            result = await client.call("screen.monitors", _monitors_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.action == "calibrate":

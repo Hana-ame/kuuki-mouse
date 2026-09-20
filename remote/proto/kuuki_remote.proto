@@ -354,6 +354,35 @@ message KuukiMessageReply {
   string json = 2;
 }
 
+// ---------------------------------------------------------------- 显示器
+//
+// 多屏机器上"截图是哪块屏 / 鼠标坐标又是哪套"必须先说清楚, 坐标校准才有意义 ——
+// 虚拟桌面原点可以是负的 (副屏排在主屏左边时)。目前仅 Windows 受控端。
+
+message MonitorInfo {
+  uint32 index = 1;        // 枚举序号 (与 primary_index 对应)
+  uint32 handle = 2;       // HMONITOR
+  string device = 3;       // \\.\DISPLAY1 之类
+  Rect rect = 4;           // 整块屏 (虚拟桌面坐标, 可以是负数)
+  Rect work = 5;           // 工作区 (去掉任务栏)
+  bool primary = 6;
+}
+
+message MonitorsRequest {
+  // 给了 x/y 就只回"这个点在哪块屏上", 否则列全部。optional: 原点 (0,0) 是
+  // 合法坐标, 普通标量分不清"没给"与"显式给 0"。
+  optional int32 x = 1;
+  optional int32 y = 2;
+}
+
+message MonitorsReply {
+  repeated MonitorInfo monitors = 1;
+  int32 count = 2;
+  Rect virtual_screen = 3;   // 所有显示器拼起来的边界 (原点可以是负数)
+  // 主显示器在 monitors 里的下标; "这个点在哪块屏"这种单点查询不给它
+  optional uint32 primary_index = 4;
+}
+
 // ---------------------------------------------------------------- 服务
 
 service RemoteControl {
@@ -387,6 +416,9 @@ service RemoteControl {
   rpc PasteText(PasteTextRequest) returns (Ack);
   // 预检: 这些键在当前键盘布局里能不能发 (不实际按键)
   rpc CheckKeys(KeyCheckRequest) returns (KeyCheckReply);
+
+  // 显示器与虚拟桌面边界 (多屏校准的前置信息; 目前仅 Windows 受控端)
+  rpc Monitors(MonitorsRequest) returns (MonitorsReply);
 
   // 窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
   rpc ListWindows(ListWindowsRequest) returns (ListWindowsReply);

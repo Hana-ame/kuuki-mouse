@@ -25,6 +25,11 @@ import json
 import os
 import sys
 
+# 从 packaging/ 跑的时候 sys.path[0] 是这个目录, 仓库根 (utf8_stdio.py 所在) 不在里面
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utf8_stdio import force_utf8_stdio  # noqa: E402
+
 #: 必须出现在产物里的模块。分三组, 缺哪组对应哪条链路会炸。
 REQUIRED = {
     "远程核心": ["remote", "remote.service", "remote.screen", "remote.ws_server",
@@ -81,25 +86,10 @@ def find_toc(build_dir: str) -> str | None:
     return candidates[-1] if candidates else None
 
 
-def _force_utf8_stdio() -> None:
-    """跟 ``remote/__main__.py`` 里那个是同一个坑, 本脚本自己也踩了:
-
-    分组名是中文 ("惰性导入" / "传输与平台"), 而英文 Windows 的控制台代码页是 cp1252,
-    一个中文都编码不了 —— CI 的 windows-latest 上, 脚本还没检查东西就先
-    UnicodeEncodeError 崩在 print 上了。所以打印之前先把流强制成 UTF-8。
-    """
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is None:  # 被替换过的流 (capsys) 没有这个方法
-            continue
-        try:
-            reconfigure(encoding="utf-8", errors="replace")
-        except (ValueError, OSError):  # noqa: B014 - 流已关闭 / detach
-            pass
-
-
 def main(argv=None) -> int:
-    _force_utf8_stdio()
+    # 分组名是中文 ("惰性导入" / "传输与平台"), 英文 Windows (cp1252) 上脚本还没开始
+    # 检查就先崩在 print 上了 —— 这个坑全仓库踩过四次, 统一实现在 utf8_stdio.py
+    force_utf8_stdio()
     parser = argparse.ArgumentParser(description="检查 PyInstaller 产物里的惰性依赖")
     parser.add_argument(
         "build_dir",

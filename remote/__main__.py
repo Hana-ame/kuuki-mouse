@@ -35,6 +35,9 @@ from remote.grpc_server import GrpcServer  # noqa: E402
 from remote.peerjs_server import PeerJsServer  # noqa: E402
 from remote.service import RemoteError, RemoteService, VERSION  # noqa: E402
 from remote.ws_server import WsServer  # noqa: E402
+# 仓库根的顶层模块 (不是 remote 的子模块): 打印中文前先把流切到 UTF-8,
+# 否则英文 Windows (cp1252) 上 --help 直接 UnicodeEncodeError。见 utf8_stdio.py
+from utf8_stdio import force_utf8_stdio  # noqa: E402
 
 log = logging.getLogger("kuuki.remote")
 
@@ -66,28 +69,6 @@ def platform_refusal(platform: str | None = None) -> str | None:
         "  想在 WSL 里控制 Windows 桌面: 见 remote/win/ (实验性, 未接入服务端)。\n"
         "  详见 remote/README.md 第 5 节 (两端点的部署位置) 与第 8 节 (已知限制)。"
     )
-
-
-def force_utf8_stdio() -> None:
-    """把 stdout / stderr 强制成 UTF-8 输出。
-
-    不修会怎样: 帮助文字、错误提示、``--json`` 里的主机名/路径都可能是中文, 而 Windows
-    控制台的代码页由系统语言决定 —— 英文版是 cp1252, 一个中文都编码不了。结果就是
-    ``--help`` 这种最该稳定的命令直接 UnicodeEncodeError 崩掉, 用户连帮助都看不到
-    (CI 的 windows-latest runner 就是英文系统, 第一次跑构建就撞在这个上)。
-
-    ``errors="replace"`` 是最后一道保险: 万一终端编码真的不支持, 也好歹把命令跑完,
-    而不是抛异常退出。
-    """
-    for stream in (sys.stdout, sys.stderr):
-        # 被 pytest 的 capsys 之类替换过的流没有 reconfigure, 跳过即可
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is None:
-            continue
-        try:
-            reconfigure(encoding="utf-8", errors="replace")
-        except (ValueError, OSError):  # pragma: no cover - 流已关闭 / detach
-            pass
 
 
 def build_parser() -> argparse.ArgumentParser:

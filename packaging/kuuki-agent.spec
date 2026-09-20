@@ -66,6 +66,9 @@ project_hidden = (
         "attitude",
         # remote/input.py 的鼠标控制器 (同上)
         "controller",
+        # 仓库根顶层模块, 不是 remote 的子模块 —— 不会跟着 remote 自动进包,
+        # 而 remote/__main__.py 靠它在英文系统上打中文帮助
+        "utf8_stdio",
     ]
 )
 

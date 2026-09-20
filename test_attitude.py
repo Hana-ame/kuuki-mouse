@@ -3,6 +3,12 @@
 import math
 import random
 
+# 结果里的 "[PASS]" 和 "全部通过" 是中文, 英文 Windows (cp1252) 上 print 会
+# UnicodeEncodeError —— 这个脚本在英文 CI 上崩过一次。见 utf8_stdio.py
+from utf8_stdio import force_utf8_stdio
+
+force_utf8_stdio()
+
 # 固定随机种子: 仿真含陀螺/加速度计噪声, 种子保证可复现(避免 Mahony vs 纯陀螺漂移对比的边界抖动)
 random.seed(42)
 

@@ -20,8 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from remote.__main__ import force_utf8_stdio  # noqa: E402
 from remote.ctl import build_parser, _fill_defaults  # noqa: E402
+from utf8_stdio import force_utf8_stdio  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 

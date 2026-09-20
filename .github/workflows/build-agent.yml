@@ -84,6 +84,12 @@ jobs:
         # 所以 runner 上没有桌面/没有中文 locale 也不会假红。
         run: pytest test_remote.py -q
 
+      - name: 姿态解算测试 (脚本式, pytest 收集不了)
+        # test_attitude.py 顶层直接 raise SystemExit, pytest 一收集就把它判成失败,
+        # 于是它一直只在本地跑过。姿态解算是空气鼠标的核心 (Mahony 积分 / 角度换算),
+        # app.py 整条链路都压在上面 —— 不能因为文件不合 pytest 的口味就没人跑。
+        run: python test_attitude.py
+
       - name: web 界面逻辑测试 (键盘 / token 握手)
         # web/ 是手机端的操作界面, 之前**零测试覆盖**: 键盘布局和 token 握手改坏了没人知道。
         # 用 node + 最小 DOM 桩跑真的 script.js —— 见 tests/web_ui.test.js。

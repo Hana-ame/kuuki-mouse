@@ -41,6 +41,13 @@ REQUIRED = {
     # 全是运行期惰性 import 的, 静态分析抓不到 —— 本脚本存在的理由
     "惰性导入": ["peerjs", "peerjs.peer", "peerjs.dataconnection", "peerjs.api",
                  "app", "controller", "attitude"],
+    # remote 的子模块里也有几个是**函数体内** import 的 (service.py 里
+    # `from . import monitor` / calibrate / window / toast / input):
+    # collect_submodules("remote") 应该能覆盖它们, 但"应该"不算证据 —— 漏一个
+    # 的表现是 exe 能起、一调那个 op 才 ModuleNotFoundError, 和上面那组同一类风险,
+    # 所以一起盯住。
+    "远程惰性子模块": ["remote.monitor", "remote.calibrate", "remote.window",
+                       "remote.toast", "remote.input", "remote.vision", "remote.ice"],
     # WebRTC 栈: PeerJS 传输要连 broker 才用得上
     "WebRTC": ["aiortc", "av", "aioice", "pyee", "aiohttp"],
     "传输与平台": ["grpc", "google.protobuf", "websockets", "PIL", "PIL.ImageGrab",

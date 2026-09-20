@@ -45,11 +45,13 @@ jobs:
       contents: write
 
     steps:
+      # v4/v5 这一代 action 跑在 Node 20 上, GitHub 已标记弃用 (每次 run 都挂一条
+      # annotation)。升到当前大版本消掉它 —— 免得将来强制下线时突然红。
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: 准备 Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           # 3.11 是 av / aiortc / pywin32 wheel 覆盖最全的一档, 别轻易动
           python-version: "3.11"
@@ -112,8 +114,11 @@ jobs:
 
       - name: 上传打包警告日志
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
+          # v5 默认不再覆盖同名 artifact: 重跑一次 workflow 会直接失败。
+          # 这里的语义一直是"同一次 run 里覆盖", 显式写回来。
+          overwrite: true
           name: kuuki-agent-build-warnings
           # PyInstaller 的 warn 文件在 workpath/<spec名>/ 下, 不是 workpath 根目录
           path: build/agent/kuuki-agent/warn-kuuki-agent.txt
@@ -216,8 +221,9 @@ jobs:
           Get-Item kuuki-agent-windows-x64.zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
       - name: 上传产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
+          overwrite: true
           name: kuuki-agent-windows-x64
           path: kuuki-agent-windows-x64.zip
           if-no-files-found: error

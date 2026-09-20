@@ -253,7 +253,8 @@ class WsServer:
                         continue
                     except Exception as exc:  # noqa: BLE001
                         await self._send_error(
-                            conn, req_id, RemoteError("internal", f"{exc.__class__.__name__}: {exc}")
+                            conn, req_id,
+                            RemoteError("internal", f"{exc.__class__.__name__}: {exc}"),
                         )
                         continue
                     header = {
@@ -262,6 +263,14 @@ class WsServer:
                         "format": capture.format,
                         "width": capture.width,
                         "height": capture.height,
+                        # source_* 是**原始屏幕**尺寸。截图可能被 max_width 缩过,
+                        # 拿它跟 width 一除才是"展示坐标 -> 真实屏幕坐标"的系数。
+                        # JSON 通道 (Capture.to_dict()) 一直有这两个字段, 二进制帧
+                        # 头漏了 —— 于是按帧头算系数会得到 1.0, 鼠标点偏整个缩放比
+                        # (1680 的屏按 1000 宽的帧去点, 偏到屏幕中间偏左上)。
+                        "source_width": capture.source_width,
+                        "source_height": capture.source_height,
+                        "scale": round(capture.scale, 4),
                         "bytes": len(data),
                         "ts": capture.captured_at,
                         "duration_ms": round(capture.duration_ms, 2),
@@ -278,7 +287,9 @@ class WsServer:
                 except RemoteError as exc:
                     await self._send_error(conn, req_id, exc)
         except Exception as exc:  # 连接异常 (含正常关闭的 ConnectionClosed)
-            if exc.__class__.__name__ not in ("ConnectionClosed", "ConnectionClosedOK", "ConnectionClosedError"):
+            if exc.__class__.__name__ not in (
+                "ConnectionClosed", "ConnectionClosedOK", "ConnectionClosedError"
+            ):
                 log.warning("WS 连接异常: %s: %s", exc.__class__.__name__, exc)
         finally:
             for task in watches.values():
@@ -304,7 +315,10 @@ class WsServer:
                         {
                             "event": "error",
                             "watch_id": watch_id,
-                            "error": {"code": "internal", "message": f"{exc.__class__.__name__}: {exc}"},
+                            "error": {
+                                "code": "internal",
+                                "message": f"{exc.__class__.__name__}: {exc}",
+                            },
                         },
                     )
                     return

@@ -1828,3 +1828,158 @@ def test_ice_patch_can_be_disabled_by_env(monkeypatch):
     monkeypatch.setenv("KUUKI_ICE_KEEP_LINKLOCAL", "1")
     monkeypatch.setattr(ice, "_patched", False)   # 幂等开关会影响这条, 先复位
     assert ice.patch_aioice_addresses() is False
+
+
+# ================================================================ vision 视觉定位
+
+# vision 的定位能力是"让调用方不必自己看图"的那一环, 所以它不能靠真机截图来测
+# (截图内容不稳定)。这里用 PIL 合成**已知答案**的画面: 蓝块画在 (100,50), 那么
+# 找出来的结果就该在 (100,50) 附近。合成图是纯内存操作, 也不碰鼠标键盘。
+
+BLUE = (26, 115, 232)
+
+
+def _synthetic(size=(400, 300), blocks=()):
+    """造一张白底图 + 若干纯色块, 返回 (Image, png_bytes)。"""
+    from PIL import ImageDraw
+
+    img = Image.new("RGB", size, (255, 255, 255))
+    for x0, y0, x1, y1, color in blocks:
+        ImageDraw.Draw(img).rectangle([x0, y0, x1, y1], fill=color)
+    return img, _png_bytes(img)
+
+
+def _png_bytes(img):
+    import io
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_vision_scale_of_and_screen_coordinates():
+    from remote import vision
+
+    # 系数必须由 source_width 算出来。只看 width 会得 1.0, 然后鼠标点偏一整个缩放比
+    assert vision.scale_of({"width": 1000, "source_width": 1680}) == 1.68
+    assert vision.scale_of({"width": 1000}) == 1.0          # 没有源尺寸就别瞎猜
+    assert vision.scale_of(None) == 1.0
+    rect = vision.Rect(x=100, y=50, w=40, h=20)
+    assert rect.center == (120, 60)
+    assert vision.to_screen(rect, 1.68) == (202, 101)
+    # to_dict 里两个坐标都要给: x/y 是展示坐标, screen.* 是能直接去点的
+    payload = rect.to_dict(1.68)
+    assert payload["center"] == {"x": 120, "y": 60}
+    assert payload["screen"] == {"x": 202, "y": 101}
+
+
+def test_vision_find_color_locates_blocks_and_drops_specks():
+    from remote import vision
+
+    img, _ = _synthetic(blocks=[
+        (100, 50, 140, 70, BLUE),    # 40x20 的大块
+        (300, 220, 360, 260, BLUE),  # 另一个大块
+        (10, 10, 20, 20, BLUE),      # 10x10 的碎屑, 应被 min_pixels 滤掉
+    ])
+    found = vision.find_color(img, BLUE, tol=20, min_pixels=60)
+    centers = [r.center for r in found]
+    assert len(found) == 2, f"应当只剩两个大块, 实际 {centers}"
+    # 包围盒会按 cell 向外取整, 所以看的是中心点落在哪, 不是左上角严丝合缝
+    near_big = [c for c in centers if abs(c[0] - 120) < 20 and abs(c[1] - 60) < 20]
+    near_other = [c for c in centers if abs(c[0] - 330) < 20 and abs(c[1] - 240) < 20]
+    assert near_big and near_other
+
+
+def test_vision_find_color_region_offset_is_applied():
+    from remote import vision
+
+    img, _ = _synthetic(blocks=[(100, 50, 140, 70, BLUE)])
+    found = vision.find_color(img, BLUE, tol=20, region=(80, 40, 100, 60), min_pixels=60)
+    assert found, "region 里应该有那个蓝块"
+    cx, cy = found[0].center
+    # 裁完之后坐标必须还原回**整张图**的坐标系, 不是裁剪框内的坐标
+    assert abs(cx - 120) < 20 and abs(cy - 60) < 20
+
+
+def test_vision_match_template_recovers_position():
+    from remote import vision
+
+    img, _ = _synthetic(blocks=[(120, 80, 160, 110, BLUE)])
+    template = img.crop((120, 80, 160, 110))
+    found = vision.match_template(img, template, threshold=0.85)
+    assert found, "同分辨率下必须找得到"
+    assert found[0].x == 120 and found[0].y == 80
+    assert found[0].score >= 0.99
+
+
+def test_vision_diff_finds_changed_region():
+    from remote import vision
+
+    before, _ = _synthetic(blocks=[(100, 50, 140, 70, BLUE)])
+    after, _ = _synthetic(blocks=[(100, 50, 140, 70, BLUE), (150, 150, 250, 200, (200, 30, 30))])
+    changed = vision.diff(before, after, tol=18, min_pixels=40)
+    assert changed, "加了一块红矩形必须被 diff 抓到"
+    x0, y0 = changed[0].x, changed[0].y
+    assert abs(x0 - 150) <= 8 and abs(y0 - 150) <= 8
+
+    nothing = vision.diff(before, before)
+    assert nothing == [], "同一张图不该有差异区域"
+
+
+def test_vision_describe_grid_and_dominant_colors():
+    from remote import vision
+
+    img, _ = _synthetic(blocks=[(0, 0, 200, 150, BLUE)])
+    grid = vision.describe_grid(img, cols=4, rows=3)
+    assert len(grid) == 12
+    # 左上半蓝: 主色偏蓝; 右下半白: content 接近 0 (没内容的纯色块)
+    top_left = [b for b in grid if b["col"] == 0 and b["row"] == 0][0]
+    assert top_left["rgb"][2] > top_left["rgb"][0], "蓝色分量应当占优"
+
+    palette = vision.dominant_colors(img, top=4)
+    assert palette[0]["share"] > 0.4
+    assert any(p["rgb"] == list(BLUE) for p in palette)
+
+
+def test_locate_result_returns_clickable_screen_coordinates():
+    from argparse import Namespace
+
+    from remote.client import _locate_result
+
+    img, payload = _synthetic(blocks=[(100, 50, 140, 70, BLUE)])
+    header = {"width": img.width, "height": img.height, "source_width": img.width * 2}
+    args = Namespace(
+        describe=False, dominant=False, saturated=False, color="#1a73e8",
+        template=None, diff_with=None, save_template=None, box=None,
+        tol=24, min_pixels=60, threshold=0.85, top=10, region=None,
+    )
+    result = _locate_result(args, payload, header)
+    assert result["mode"] == "color"
+    assert result["scale"] == 2.0
+    assert result["matches"], "应当找到那个蓝块"
+    match = result["matches"][0]
+    # 展示坐标 ~ (120,60), 真实屏幕坐标是它的两倍
+    assert abs(match["center"]["x"] - 120) < 20
+    assert abs(match["screen"]["x"] - 240) < 40
+
+
+def test_locate_result_describe_mode_and_bad_color():
+    from argparse import Namespace
+
+    from remote.client import _locate_result
+
+    img, payload = _synthetic(blocks=[(100, 50, 140, 70, BLUE)])
+    base = dict(describe=True, dominant=False, saturated=False, color=None,
+                template=None, diff_with=None, save_template=None, box=None,
+                tol=24, min_pixels=60, threshold=0.85, top=10, region=None)
+
+    result = _locate_result(Namespace(**base), payload,
+                            {"width": img.width, "height": img.height,
+                             "source_width": img.width})
+    assert result["mode"] == "describe"
+    assert len(result["matches"]) == 40            # 8 列 x 5 行
+    assert "screen" in result["matches"][0]
+
+    with pytest.raises(ValueError):
+        _locate_result(Namespace(**{**base, "describe": False, "color": "zzz"}),
+                       payload, {"width": img.width, "height": img.height})

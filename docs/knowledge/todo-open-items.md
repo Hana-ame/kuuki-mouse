@@ -11,7 +11,15 @@
 > `protocol-mouse-click-ignores-xy.md`）、`keyboard.paste` 中文经 `clip.exe`
 > 变 GBK 乱码（见 `gui-chinese-input-via-clipboard.md`）、`{"key": " "}` 空格
 > 被 strip 成空串后误报"键名不能为空"（见 `protocol-key-whitespace.md`）、
-> `Capture.to_dict()` 漏 `backend` 字段（JSON 通道与二进制帧头不一致）。
+> `Capture.to_dict()` 漏 `backend` 字段（JSON 通道与二进制帧头不一致）、
+> WS 二进制帧头漏 `source_width`（见 `env-ws-frame-missing-source-width.md`）。
+
+## 未做的能力
+
+- **window 类 op**（`window.list` / `window.focus` / `window.title`）—— 纯视觉
+  定位无法区分"长得像"的应用窗口，2026-09-20 已实战翻车：前台是 WorkBuddy，
+  视觉脚本把它的会话标签栏当成了浏览器标签栏（见 `gui-window-focus-gap.md`）
+- **OCR / 文字识别** —— 视觉能定位"这里有个框"，认不出框里写的是什么
 
 ## 未做的验证
 

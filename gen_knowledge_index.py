@@ -65,7 +65,10 @@ def main():
     lines.append("")
     lines.append(f"共 **{total} 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。")
 
-    (ROOT / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # newline="\n" 不能省: 不写的话 Path.write_text() 走的是 text mode 默认值,
+    # Windows 上会把每一个 \n 换成 \r\n, 生成的索引就成了混进仓库里的唯一一个
+    # CRLF 文件 —— 其它知识条目是 LF, 两边对着 diff 时会平白多出一整摞改动。
+    (ROOT / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     print(f"索引已生成，共 {total} 条")
 
 

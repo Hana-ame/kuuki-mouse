@@ -12,6 +12,19 @@
     python -m remote.client peerjs --peer kuuki-mouse-ABCDE info
 
 带 token 时加 ``--token XXX`` (WS 会拼进 URL, gRPC 会放进 metadata)。
+
+``locate`` 是给**自己看不了图**的调用方准备的: 它把"屏幕上哪个坐标是那个按钮"
+算出来, 直接吐可以喂给 ``mouse.click`` 的真实屏幕坐标::
+
+    python -m remote.client ws locate --describe              # 这一屏大概是什么样
+    python -m remote.client ws locate --dominant              # 主色调有哪几种
+    python -m remote.client ws locate --color '#1a73e8'       # 找蓝色按钮
+    python -m remote.client ws locate --template icon.png     # 找图标 (模板匹配)
+    python -m remote.client ws locate --diff-with prev.png    # 哪一坨变了
+    python -m remote.client ws locate --save-template btn.png --box 900,540,40,40
+
+输出的每个矩形都带 ``screen.x``/``screen.y``: 那是乘过缩放系数的**真实屏幕坐标**,
+可以直接拿去点。``x``/``y`` 是截图自身的展示坐标, 别混用。
 """
 
 from __future__ import annotations
@@ -22,7 +35,7 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 # 允许 `python remote/client.py` 直接跑
 if __package__ in (None, ""):  # pragma: no cover
@@ -43,7 +56,12 @@ except Exception:  # pragma: no cover
 class WsClient:
     """极简 WebSocket 客户端: 一次请求一次响应 + 二进制截屏帧。"""
 
-    def __init__(self, url: str = "ws://127.0.0.1:8765", token: Optional[str] = None, timeout: float = 30.0):
+    def __init__(
+        self,
+        url: str = "ws://127.0.0.1:8765",
+        token: Optional[str] = None,
+        timeout: float = 30.0,
+    ):
         self.url = url
         self.token = token or os.environ.get("KUUKI_REMOTE_TOKEN")
         self.timeout = timeout
@@ -58,9 +76,13 @@ class WsClient:
                 url = url + ("&" if "?" in url else "?") + "token=" + self.token
             headers["Authorization"] = f"Bearer {self.token}"
         try:  # websockets >= 14
-            self.ws = await ws_connect(url, additional_headers=headers or None, max_size=64 * 1024 * 1024)
+            self.ws = await ws_connect(
+                url, additional_headers=headers or None, max_size=64 * 1024 * 1024
+            )
         except TypeError:  # pragma: no cover - websockets 13 及更早
-            self.ws = await ws_connect(url, extra_headers=headers or None, max_size=64 * 1024 * 1024)
+            self.ws = await ws_connect(
+                url, extra_headers=headers or None, max_size=64 * 1024 * 1024
+            )
         return self
 
     async def __aexit__(self, *exc) -> None:
@@ -144,7 +166,12 @@ class WsClient:
 class GrpcClient:
     """把 ``RemoteService`` 的 op 名映射到 ``RemoteControl`` 的 RPC。"""
 
-    def __init__(self, target: str = "127.0.0.1:50051", token: Optional[str] = None, timeout: float = 30.0):
+    def __init__(
+        self,
+        target: str = "127.0.0.1:50051",
+        token: Optional[str] = None,
+        timeout: float = 30.0,
+    ):
         import grpc
         from google.protobuf.json_format import MessageToDict
 
@@ -284,7 +311,9 @@ class GrpcClient:
         table = {
             "ping": lambda: self.stub.Ping(empty, **self._kwargs()),
             "info": lambda: self.stub.GetInfo(empty, **self._kwargs()),
-            "screen.screenshot": lambda: self.stub.Screenshot(self._shot_request(args), **self._kwargs()),
+            "screen.screenshot": lambda: self.stub.Screenshot(
+                self._shot_request(args), **self._kwargs()
+            ),
             "mouse.position": lambda: self.stub.GetMousePosition(empty, **self._kwargs()),
             "mouse.move": lambda: self.stub.MoveMouse(
                 pb.MoveMouseRequest(
@@ -372,7 +401,9 @@ class GrpcClient:
                 **self._kwargs(),
             ),
             "kuuki": lambda: self.stub.SendKuukiMessage(
-                pb.KuukiMessageRequest(json=json.dumps(args.get("message", args), ensure_ascii=False)),
+                pb.KuukiMessageRequest(
+                    json=json.dumps(args.get("message", args), ensure_ascii=False)
+                ),
                 **self._kwargs(),
             ),
         }
@@ -475,6 +506,103 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     stream.add_argument("--count", type=int, default=5)
     _add_shot_args(stream)
 
+    loc = sub.add_parser("locate", help="在屏幕里定位目标 (颜色/模板/帧差/概览)")
+    loc.add_argument("--describe", action="store_true", help="输出网格概览 (默认就是这个)")
+    loc.add_argument("--dominant", action="store_true", help="列出主色调")
+    loc.add_argument("--color", default=None, help="按颜色找色块: #1a73e8 或 26,115,232")
+    loc.add_argument("--template", default=None, help="按形状找图标: 模板图路径")
+    loc.add_argument("--saturated", action="store_true", help="找任何颜色鲜艳的图标/按钮")
+    loc.add_argument("--diff-with", default=None, help="与这一帧比较, 找出变化的区域")
+    loc.add_argument("--save-template", default=None, help="配合 --box 把区域存成模板")
+    loc.add_argument("--box", default=None, help="x,y,w,h (给 --save-template 用)")
+    loc.add_argument("--tol", type=int, default=24, help="颜色/帧差阈值")
+    loc.add_argument("--min-pixels", type=int, default=60, help="小于这个面积的忽略")
+    loc.add_argument("--threshold", type=float, default=0.85, help="模板匹配得分下限")
+    loc.add_argument("--top", type=int, default=10, help="最多返回几个")
+    loc.add_argument("--save-frame", default=None, help="把这帧存盘, 供下次 --diff-with")
+    _add_shot_args(loc)
+
+
+def _parse_color(text: str) -> Tuple[int, int, int]:
+    """``#1a73e8`` / ``1a73e8`` / ``26,115,232`` 三种写法都认。"""
+    raw = text.strip().lstrip("#")
+    if "," in raw:
+        parts = [int(float(p.strip())) for p in raw.split(",")]
+        if len(parts) != 3:
+            raise ValueError("--color 需要 3 个通道: 26,115,232")
+        return (parts[0], parts[1], parts[2])
+    if len(raw) != 6:
+        raise ValueError(f"--color 需要 6 位十六进制: #1a73e8，收到 {text!r}")
+    return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
+
+
+def _locate_result(
+    args: argparse.Namespace, payload: bytes, header: Dict[str, Any]
+) -> Dict[str, Any]:
+    """在一帧上跑一次定位。三传输共用, 差异只在于 header 从哪来。
+
+    PIL 在这里惰性导入 —— 只用 ping / op 的人不必背上这个依赖。
+    """
+    from remote import vision
+
+    scale = vision.scale_of(header)
+    image = vision.load(payload)
+    region = None
+    if getattr(args, "region", None):
+        region = tuple(int(v) for v in args.region.split(","))
+
+    out: Dict[str, Any] = {
+        "mode": "describe",
+        "scale": round(scale, 4),
+        "frame": {"width": image.width, "height": image.height},
+        "source_width": header.get("source_width"),
+        "matches": [],
+    }
+
+    if args.save_template:
+        if not args.box:
+            raise ValueError("--save-template 必须配 --box x,y,w,h")
+        box = tuple(int(v) for v in args.box.split(","))
+        path = vision.save_template(image, box, args.save_template)
+        out.update({"mode": "save-template", "path": path,
+                    "box": {"x": box[0], "y": box[1], "w": box[2], "h": box[3]},
+                    "size": {"w": image.width, "h": image.height}})
+        return out
+
+    if args.color:
+        rects = vision.find_color(
+            image, _parse_color(args.color), tol=args.tol, region=region,
+            min_pixels=args.min_pixels, limit=args.top,
+        )
+        mode = "color"
+    elif args.template:
+        rects = vision.match_template(image, args.template, threshold=args.threshold,
+                                      limit=args.top)
+        mode = "template"
+    elif args.saturated:
+        rects = vision.find_saturated_blocks(
+            image, min_saturation=args.tol, min_pixels=args.min_pixels,
+            region=region, limit=args.top,
+        )
+        mode = "saturated"
+    elif args.diff_with:
+        rects = vision.diff(vision.load(args.diff_with), image, tol=args.tol,
+                            min_pixels=args.min_pixels, limit=args.top)
+        mode = "diff"
+    elif args.dominant:
+        out["mode"] = "dominant"
+        out["matches"] = vision.dominant_colors(image, top=args.top)
+        return out
+    else:
+        out["mode"] = "describe"
+        blocks = vision.describe_grid(image, scale=scale)
+        out["matches"] = blocks
+        return out
+
+    out["mode"] = mode
+    out["matches"] = [r.to_dict(scale) for r in rects]
+    return out
+
 
 def _add_shot_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--format", default="png", choices=["png", "jpeg", "jpg", "webp"])
@@ -558,6 +686,16 @@ async def _run_ws(args: argparse.Namespace) -> int:
             count = await client.watch(_shot_args(args) | {"fps": args.fps}, on_frame, args.count)
             print(f"共 {count} 帧, 用时 {time.time() - started:.1f}s")
             return 0
+        if args.action == "locate":
+            header, payload = await client.screenshot(_shot_args(args))
+            if args.save_frame:
+                with open(args.save_frame, "wb") as handle:
+                    handle.write(payload)
+            result = _locate_result(args, payload, header)
+            if args.save_frame:
+                result["saved_frame"] = args.save_frame
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
     return 2
 
 
@@ -567,7 +705,10 @@ def _run_grpc(args: argparse.Namespace) -> int:
             print(json.dumps(client.call(args.action), ensure_ascii=False, indent=2))
             return 0
         if args.action == "op":
-            print(json.dumps(client.call(args.name, json.loads(args.args)), ensure_ascii=False, indent=2))
+            print(json.dumps(
+                client.call(args.name, json.loads(args.args)),
+                ensure_ascii=False, indent=2,
+            ))
             return 0
         if args.action == "screenshot":
             payload = client.screenshot(_shot_args(args))
@@ -597,11 +738,30 @@ def _run_grpc(args: argparse.Namespace) -> int:
                 header = {"format": image.format, "seq": counter["n"],
                           "width": image.width, "height": image.height}
                 path = _write_frame(args.directory, "grpc", counter["n"], header, image.data)
-                print(f"  #{counter['n']} {image.width}x{image.height} {len(image.data)}B -> {path}")
+                print(f"  #{counter['n']} {image.width}x{image.height} "
+                      f"{len(image.data)}B -> {path}")
                 return True
 
             frames = client.stream(_shot_args(args) | {"fps": args.fps}, on_frame, args.count)
             print(f"共 {frames} 帧, 用时 {time.time() - started:.1f}s")
+            return 0
+        if args.action == "locate":
+            payload = client.screenshot(_shot_args(args))
+            if args.save_frame:
+                with open(args.save_frame, "wb") as handle:
+                    handle.write(payload)
+            image = client.last_image
+            header = {
+                "width": image.width,
+                "height": image.height,
+                "source_width": image.source_width,
+                "source_height": image.source_height,
+                "format": image.format,
+            }
+            result = _locate_result(args, payload, header)
+            if args.save_frame:
+                result["saved_frame"] = args.save_frame
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
     return 2
 
@@ -628,7 +788,28 @@ async def _run_peerjs(args: argparse.Namespace) -> int:
             payload = await client.screenshot(_shot_args(args))
             with open(args.path, "wb") as handle:
                 handle.write(payload)
-            print(json.dumps({"path": args.path, "bytes": len(payload)}, ensure_ascii=False, indent=2))
+            print(json.dumps(
+                {"path": args.path, "bytes": len(payload)},
+                ensure_ascii=False, indent=2,
+            ))
+            return 0
+        if args.action == "locate":
+            payload = await client.screenshot(_shot_args(args))
+            if args.save_frame:
+                with open(args.save_frame, "wb") as handle:
+                    handle.write(payload)
+            # PeerJS 的帧头留在 last_capture 里 (它是 JSON 通道, 不像 WS 有二进制帧);
+            # 这里拼成和 WS / gRPC 同形状才能复用同一套坐标换算。少了
+            # source_width 就还原不出真实坐标 —— 宁可不说话也不返回错坐标。
+            header = dict(getattr(client, "last_capture", None) or {})
+            if not header.get("source_width"):
+                print("失败: PeerJS 这一帧没有 source_width, 换算不出真实屏幕坐标。",
+                      file=sys.stderr)
+                return 1
+            result = _locate_result(args, payload, header)
+            if args.save_frame:
+                result["saved_frame"] = args.save_frame
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
         if args.action == "watch":
             # PeerJS 侧没有服务端推流, 用轮询实现 (op 语义一致)

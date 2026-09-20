@@ -54,14 +54,17 @@ jobs:
           # 3.11 是 av / aiortc / pywin32 wheel 覆盖最全的一档, 别轻易动
           python-version: "3.11"
           cache: pip
+          # 三个都列上: 少列一个, 那个文件改了而别的没改时缓存键不变, 会用旧缓存
           cache-dependency-path: |
             requirements.txt
             requirements-remote.txt
+            requirements-build.txt
+            requirements-dev.txt
 
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-remote.txt -r requirements-build.txt
+          pip install -r requirements.txt -r requirements-remote.txt -r requirements-build.txt -r requirements-dev.txt
           python -c "import PyInstaller; print('pyinstaller', PyInstaller.__version__)"
 
       - name: 依赖自检 (打包前先确认源码能跑)
@@ -69,6 +72,16 @@ jobs:
           python -c "import remote, remote.service, remote.screen, remote.input; print('remote ok', remote.VERSION)"
           python -c "import grpc, google.protobuf, websockets, PIL, pynput; print('transport ok')"
           python -c "import peerjs, aiortc, av, aioice; print('webrtc ok')"
+
+      - name: 单元测试 (打包前先确认逻辑没坏)
+        # 放在打包之前: 逻辑错了就没必要花一分钟打一个注定是坏的 exe。
+        # 依赖本机环境的用例自己会 skip (见 test_remote.py 里的 has_real_backend 等),
+        # 所以 runner 上没有桌面/没有中文 locale 也不会假红。
+        run: pytest test_remote.py -q
+
+      - name: 文档代码块校验 (README/docs 里的命令得真能解析)
+        # 文档里的 CLI 示例会随代码腐烂 —— 之前就是它抓出 shot 的位置参数被 path 吞掉。
+        run: python check_ctl_docs.py
 
       - name: PyInstaller 打包
         # --workpath 显式指定: 后面的产物检查脚本按这个路径找 PYZ 的 TOC
@@ -111,7 +124,8 @@ jobs:
         # 端口刻意避开默认的 8765/50051, 免得和 runner 上别的东西撞。
         shell: bash
         run: |
-          set -uo pipefail
+          # -e 必须有: 缺了它, 中间任何断言失败都会被吞掉, 只有最后一条命令说了算
+          set -euo pipefail
           EXE=dist/kuuki-agent/kuuki-agent.exe
           "$EXE" --no-peerjs --ws-port 18765 --grpc-port 50052 > agent_e2e.log 2>&1 &
           pid=$!
@@ -136,13 +150,22 @@ jobs:
           test -s ws_shot.png
           test -s grpc_shot.png
 
+          # 手机端 (web/) 走的是 kuuki 老协议透传, 不是 op 封装 —— 这条才是用户
+          # 扫码后真正在用的路。它要 `from app import handle_message`, 而 app.py
+          # 顶层就 `app = App()` (含 pynput 控制器), 打进 exe 后能不能起来没人验过。
+          # 用一个未知 t 的探针: 不产生任何输入, 但能证明模块加载 + 路由都活着。
+          python -m remote.client ws --url ws://127.0.0.1:18765 \
+            op kuuki --args '{"message":{"t":"__probe__"}}' | tee kuuki_probe.json
+          grep -q '"handled": false' kuuki_probe.json
+          echo "端到端通过: WS / gRPC / kuuki 老协议透传 三条路都通"
+
       - name: 深度冒烟 —— 真起一次 PeerJS 服务 (需要外网, 失败不阻塞)
         # 只开 PeerJS 一个传输, 看它能不能注册到公开 broker 拿到房间码。
         # 这一步依赖 runner 能连 0.peerjs.com, 外网抖动会让它红, 所以 continue-on-error。
         shell: bash
         continue-on-error: true
         run: |
-          set -uo pipefail
+          set -euo pipefail
           EXE=dist/kuuki-agent/kuuki-agent.exe
           "$EXE" --no-ws --no-grpc --json > peerjs_smoke.log 2>&1 &
           pid=$!

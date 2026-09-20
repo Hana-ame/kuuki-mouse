@@ -1,0 +1,12 @@
+# 只用于**开发/验证** (跑测试、校验文档), 不是运行时依赖, 也不是打包依赖。
+#
+# 为什么单独一个文件:
+#   - 受控端 exe 里已经带了运行时依赖, 拿到 exe 的人不需要 pytest
+#   - PyInstaller 也已经单独拆到 requirements-build.txt 了, 同理
+#
+# 用法:
+#   pip install -r requirements.txt -r requirements-remote.txt -r requirements-dev.txt
+#   pytest test_remote.py -q
+#   python check_ctl_docs.py
+
+pytest>=7        # test_remote.py 用的是原生 assert + parametrize, 7.x 足够

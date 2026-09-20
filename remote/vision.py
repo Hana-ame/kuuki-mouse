@@ -232,13 +232,15 @@ def find_color(
     if not hits:
         return []
 
-    # 命中点数是"格数", 换算成真实像素要乘 **采样步长** 而不是格子边长:
-    # 一次采样代表 step² 个像素。乘 cell² 会把 12x12 的小方块也算成 144 像素,
-    # 于是 min_pixels 形同虚设。
-    unit = step * step
+    # hits 是**去重后的格数**, 而一格代表 cell² 个像素 (不是 step²)。
+    # 写成 step*step 会把面积低估 (cell/step)² 倍 —— 真机翻过车: 画图色板上的
+    # 12px 色块缩放后只剩 ~9px, 格数只有十来个, 乘 step² 之后连 min_pixels=25
+    # 都过不了, 于是"按颜色找色板方块"永远空手而归。
+    # 但直接乘 cell² 也有另一头的问题: 只占一格的碎屑会被高估成 cell²。所以
+    # 再拿格子的外接盒面积封顶 —— 碎屑的盒本来就只有那么大, 高估不出去。
     rects: List[Rect] = []
     for x0, y0, x1, y1, count in _clusters(hits, cell, step, width, height):
-        approx = count * unit
+        approx = min(count * cell * cell, (x1 - x0) * (y1 - y0))
         if approx < min_pixels:
             continue
         rects.append(

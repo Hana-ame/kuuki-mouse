@@ -583,8 +583,8 @@ zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstalle
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v   # 144 passed / 1 skipped
-                                     # 其中 29 项专测控制端, 16 项专测 PeerJS, 6 项专测 vision,
+python -m pytest test_remote.py -v   # 145 passed / 1 skipped
+                                     # 其中 29 项专测控制端, 16 项专测 PeerJS, 7 项专测 vision,
                                      # 7 项专测窗口, 12 项专测坐标校准
 python -m remote --selftest --selftest-input
 ```
@@ -620,6 +620,11 @@ python -m remote --selftest --selftest-input
   没有平移, 多显示器上这一项才是它存在的理由)。三个坑已在模块里堵掉: 前后帧都画
   光标会让帧差出现两个合法候选、动态 UI 里凑巧的红色方块会被当成标记 (本机一度
   9 错 4, 拟合出的系数差 19%)、贴边的标记被裁一半导致重心内偏。
+  **端到端回测** (`evidence/calibration/verify_mspaint.py`): 视觉找到画图色板上的
+  红色方块 → 标定换算成鼠标坐标 → 移过去后受控端画出的光标与预测位置差 **0.71px**
+  → 点击, 色块被选中、"颜色 1" 指示器同步变红 —— 帧差的两处变化都落在预期位置。
+  这条链路曾在 `vision.find_color` 上断过: 面积换算错杀小目标, 只好去匹配大块
+  笔迹 (见 `docs/knowledge/gui-find-color-area-unit.md`), 已修并有专测钉住。
 
 > `.venv-win` 里现在装了 pytest (9.1.1)。装的时候若 pip 报连不上
 > `127.0.0.1:10809`, 那是系统代理变量指到了一个没在跑的代理, 加

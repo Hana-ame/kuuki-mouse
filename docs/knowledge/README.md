@@ -98,6 +98,7 @@
 
 - [中文输入走剪贴板 + Ctrl+V，不要用逐字注入](gui-chinese-input-via-clipboard.md)
 - [calibrate: 别相信缩放系数, 把它测出来](gui-coordinate-calibration.md)
+- [find_color 的 min_pixels 曾经错杀小目标: 面积换算的 unit 写错了](gui-find-color-area-unit.md)
 - [GUI 自动化的可靠套路：截图闭环](gui-screenshot-loop-and-coordinate-scale.md)
 - [真人正在用这台电脑时，注入会互相干扰](gui-user-interference.md)
 - [remote/vision: 让"看"也归属 repo 的定位模块](gui-vision-locate-module.md)
@@ -123,4 +124,4 @@
 
 ---
 
-共 **62 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **63 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

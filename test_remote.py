@@ -2089,9 +2089,9 @@ def test_vision_find_color_locates_blocks_and_drops_specks():
     from remote import vision
 
     img, _ = _synthetic(blocks=[
-        (100, 50, 140, 70, BLUE),    # 40x20 的大块
+        (100, 50, 140, 70, BLUE),    # 40x20 的大块 (800px)
         (300, 220, 360, 260, BLUE),  # 另一个大块
-        (10, 10, 20, 20, BLUE),      # 10x10 的碎屑, 应被 min_pixels 滤掉
+        (7, 7, 10, 10, BLUE),        # 4x4 的碎屑, 一个 cell 格都占不满 —— 应被滤掉
     ])
     found = vision.find_color(img, BLUE, tol=20, min_pixels=60)
     centers = [r.center for r in found]
@@ -2100,6 +2100,26 @@ def test_vision_find_color_locates_blocks_and_drops_specks():
     near_big = [c for c in centers if abs(c[0] - 120) < 20 and abs(c[1] - 60) < 20]
     near_other = [c for c in centers if abs(c[0] - 330) < 20 and abs(c[1] - 240) < 20]
     assert near_big and near_other
+
+
+def test_vision_find_color_keeps_small_palette_squares():
+    """真机翻过车的场景: 画图色板上的色块只有 ~10px, min_pixels=60 也要找得到。
+
+    面积换算曾经乘 step² 而不是 cell², 把小块的近似面积低估了 (cell/step)² 倍,
+    结果"按颜色找色板方块"永远空手而归, 只好退而去匹配大块的黑笔迹。
+    """
+    from remote import vision
+
+    img, _ = _synthetic(size=(600, 120), blocks=[
+        (500, 40, 512, 52, (237, 28, 36)),   # 12x12, 缩放后也就这么大
+        (520, 40, 530, 50, (34, 177, 76)),   # 10x10
+    ])
+    found = vision.find_color(img, (237, 28, 36), tol=30, min_pixels=60)
+    assert len(found) == 1, f"12x12 的色块必须找得到, 实际 {found}"
+    assert abs(found[0].center[0] - 506) < 6
+    assert abs(found[0].center[1] - 46) < 6
+    # 面积是近似值, 但数量级必须对 —— 不能再出现"12x12 报成十几像素"的事
+    assert found[0].pixels >= 60
 
 
 def test_vision_find_color_region_offset_is_applied():

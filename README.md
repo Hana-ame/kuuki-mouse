@@ -265,14 +265,14 @@ remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键�
   ├─ peerjs_selftest.py  PeerJS 真机自检 (连公开 broker; 假屏幕假输入, 不动真实光标)
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
-test_remote.py   remote/ 扩展的测试 (144 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端/PeerJS 回环/vision 与窗口/坐标校准用例)
+test_remote.py   remote/ 扩展的测试 (145 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端/PeerJS 回环/vision 与窗口/坐标校准用例)
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机, P1-P3/P6 已落地)
 docs/ctl-selfhost-runbook.md  控制端实战手册: 实测记录 / 注意事项 / 一步步复现本机自控
 check_ctl_docs.py             把文档代码块里的命令喂给真 parser (四个 CLI 全覆盖, 防文档过期)
 gen_knowledge_index.py        重生成 docs/knowledge/README.md 索引 (新增知识点后跑它即可)
-docs/knowledge/               **踩坑与注意事项, 一个文件一个知识点 (62 条), 见 docs/knowledge/README.md**
+docs/knowledge/               **踩坑与注意事项, 一个文件一个知识点 (63 条), 见 docs/knowledge/README.md**
 
 # ---- 调试 / 演示小工具 ----
 annotate.py      截图上叠坐标网格 + 标记目标点/色块, 核对"算出的坐标偏没偏"

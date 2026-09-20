@@ -191,5 +191,18 @@ for (const lib of ['vendor/peerjs.min.js', 'vendor/mqtt.min.js']) {
     check(`${lib} 文件在且被引用`, onDisk && html.includes(lib), true);
 }
 
+// ---------------- script.js 引用的元素必须真的在页面上 ----------------
+// 缺一个 id, $('x') 就是 null, 后面的 addEventListener 直接 TypeError ——
+// 页面一打开就是个死页面。DOM 桩里 getElementById 永远返回 mock, 测不出这个,
+// 所以只能拿 html 和 js 对一遍。
+console.log('--- 元素 id 对齐 ---');
+const referenced = [...new Set([...src.matchAll(/\$\('([A-Za-z0-9_]+)'\)/g)].map((m) => m[1]))];
+const defined = new Set([...html.matchAll(/id="([A-Za-z0-9_]+)"/g)].map((m) => m[1]));
+check(
+    `script.js 引用的 ${referenced.length} 个 id 都在 index.html 里`,
+    referenced.filter((id) => !defined.has(id)),
+    []
+);
+
 console.log(fail ? `\n${fail} 项失败` : '\n全部通过');
 process.exit(fail ? 1 : 0);

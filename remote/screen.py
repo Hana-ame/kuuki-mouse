@@ -28,6 +28,13 @@ from PIL import Image, ImageGrab
 
 __all__ = ["Region", "Capture", "ScreenCapture"]
 
+#: 截图上画的光标标记 (``draw_cursor=True``) 长什么样。提到模块级是因为
+#: ``remote/calibrate.py`` 认标记时要照着同一个值去找 —— 两边各写一份的话, 改了
+#: 颜色那边就会"突然认不出标记", 而且很难想到根因在另一个文件里。
+CURSOR_COLOR: Tuple[int, int, int] = (255, 0, 0)
+CURSOR_ARM: int = 12
+CURSOR_HALO: int = 5
+
 
 # ---------------------------------------------------------------- 数据结构
 
@@ -274,7 +281,7 @@ class ScreenCapture:
 
         draw = ImageDraw.Draw(image)
         cx, cy = int(rel_x), int(rel_y)
-        arm, color = 12, (255, 0, 0)
+        arm, color = CURSOR_ARM, CURSOR_COLOR
         draw.line((cx - arm, cy, cx + arm, cy), fill=color, width=2)
         draw.line((cx, cy - arm, cx, cy + arm), fill=color, width=2)
         draw.ellipse((cx - 5, cy - 5, cx + 5, cy + 5), outline=color, width=2)

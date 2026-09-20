@@ -588,3 +588,65 @@ def save_template(image: Any, box: Tuple[int, int, int, int], path: str) -> str:
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     crop.save(path)
     return path
+
+
+# -------------------------------------------------------------------- 证据图
+
+
+def grid_overlay(
+    image: Any,
+    cols: int = 8,
+    rows: int = 5,
+    color: Tuple[int, int, int] = (255, 40, 40),
+    label: bool = True,
+    marks: Optional[Sequence[Dict[str, Any]]] = None,
+    path: Optional[str] = None,
+) -> "Image.Image":
+    """给一帧画上网格与坐标标签, 产出**人能核对**的证据图。
+
+    调用方能读 JSON 不等于能放心: "屏幕上 (1032, 611) 有个蓝色按钮"这句话对不
+    对, 最好让人一眼能看出来。每格左上角标该格的图坐标范围, ``marks`` 里再逐个
+    画十字并标注 —— 通常放的是"这里被判定为目标"和"鼠标实际点在这儿"。
+
+    ``marks`` 每项形如 ``{"x": 100, "y": 50, "text": "target"}``。坐标是**图坐标**
+    (与 :func:`describe_grid` 输出的 ``center`` 同一套), 要标屏幕坐标自己写进 text。
+
+    不改入参那张图 (返回新的 Image) —— 原帧往往还要接着做别的判定。
+    """
+    from PIL import ImageDraw
+
+    img = load(image).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    width, height = img.size
+    cols, rows = max(1, int(cols)), max(1, int(rows))
+    cw, ch = width / cols, height / rows
+
+    for index in range(1, cols):
+        x = int(round(index * cw))
+        draw.line((x, 0, x, height - 1), fill=color, width=1)
+    for index in range(1, rows):
+        y = int(round(index * ch))
+        draw.line((0, y, width - 1, y), fill=color, width=1)
+    if label:
+        for row in range(rows):
+            for col in range(cols):
+                x = int(round(col * cw)) + 2
+                y = int(round(row * ch)) + 2
+                draw.text((x, y), f"{int(col * cw)},{int(row * ch)}", fill=color)
+
+    for mark in marks or []:
+        mx, my = int(mark.get("x", 0)), int(mark.get("y", 0))
+        text = mark.get("text", "")
+        tone = tuple(mark.get("rgb", color)) or color
+        arm = 10
+        draw.line((mx - arm, my, mx + arm, my), fill=tone, width=2)
+        draw.line((mx, my - arm, mx, my + arm), fill=tone, width=2)
+        draw.ellipse((mx - 6, my - 6, mx + 6, my + 6), outline=tone, width=2)
+        if text:
+            # 标签往右下角挪 8px, 免得盖住十字本身
+            draw.text((mx + 8, my + 8), text, fill=tone)
+
+    if path:
+        os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+        img.save(path)
+    return img

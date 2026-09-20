@@ -177,6 +177,102 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             capture, data = self.service.capture(self._shot_args(request))
         return self._to_image(capture, data)
 
+    def Calibrate(self, request, context):
+        self._check_auth(context)
+        # 标量一律"非零才传": proto3 的普通标量分不清"显式给了 0"和"压根没给",
+        # 而这里每个 0 的意思都是"用服务端默认" —— 直接塞进去会把 tolerance 变成
+        # 0px、cols 变成 0 列, 于是同一条命令在 gRPC 上得到与 WS 不同的结果
+        # (这条不一致就是被跨传输用例抓出来的)。
+        args = {}
+        for name in ("cols", "rows"):
+            value = int(getattr(request, name))
+            if value:
+                args[name] = value
+        for name in ("margin", "settle", "tolerance"):
+            value = float(getattr(request, name))
+            if value:
+                args[name] = value
+        if int(request.max_width):
+            args["max_width"] = int(request.max_width)
+        # restore 是 optional bool: 显式 false 是有意义的 (不想恢复光标位置)
+        if request.HasField("restore"):
+            args["restore"] = bool(request.restore)
+        with _translate(context):
+            result = self.service.handle("screen.calibrate", args)
+        return self._to_calibrate(result)
+
+    @staticmethod
+    def _to_calibrate(result: dict):
+        """把校准报告填进 protobuf。
+
+        ``CalibrateReply`` 的形状刻意做得和 service 返回的 dict 一样: 控制端用
+        ``MessageToDict`` 转回来要与 WS 那条传输逐字段对得上 (这是仓库里"一份
+        实现三种传输"的硬要求, 见 docs/knowledge/arch-one-impl-three-transports.md)。
+        """
+        reply = pb.CalibrateReply(
+            ok=bool(result.get("ok")),
+            verdict=result.get("verdict", ""),
+            advice=result.get("advice", ""),
+            requested=int(result.get("requested", 0)),
+            sampled=int(result.get("sampled", 0)),
+            max_width=int(result.get("max_width", 0)),
+            tolerance=float(result.get("tolerance", 0.0)),
+            restored=bool(result.get("restored")),
+            declared_scale=float(result.get("declared_scale", 0.0)),
+            fit_scale=float(result.get("fit_scale", 0.0)),
+            scale_drift=float(result.get("scale_drift", 0.0)),
+        )
+        screen = result.get("screen") or {}
+        reply.screen.width = int(screen.get("width", 0))
+        reply.screen.height = int(screen.get("height", 0))
+        for miss in result.get("missed") or []:
+            reply.missed.append(pb.CalibrationMiss(
+                screen=pb.Vec(
+                    x=float((miss.get("screen") or {}).get("x", 0.0)),
+                    y=float((miss.get("screen") or {}).get("y", 0.0)),
+                ),
+                reason=miss.get("reason", ""),
+            ))
+        # 样本不足时没有这两个字段 —— 那时也不填, MessageToDict 与 WS 一样不给
+        fit = result.get("calibration")
+        if fit:
+            reply.calibration.CopyFrom(pb.CalibrationFit(
+                ax=float(fit.get("ax", 0.0)),
+                bx=float(fit.get("bx", 0.0)),
+                ay=float(fit.get("ay", 0.0)),
+                by=float(fit.get("by", 0.0)),
+                rmse=float(fit.get("rmse", 0.0)),
+                max_abs=float(fit.get("max_abs", 0.0)),
+                count=int(fit.get("count", 0)),
+            ))
+        for item in result.get("samples") or []:
+            screen = item.get("screen") or {}
+            frame = item.get("frame") or {}
+            reply.samples.append(pb.CalibrationSample(
+                screen=pb.Vec(x=float(screen.get("x", 0.0)), y=float(screen.get("y", 0.0))),
+                frame=pb.Vec(x=float(frame.get("x", 0.0)), y=float(frame.get("y", 0.0))),
+            ))
+        for item in result.get("outliers") or []:
+            screen = item.get("screen") or {}
+            frame = item.get("frame") or {}
+            reply.outliers.append(pb.CalibrationOutlier(
+                screen=pb.Vec(x=float(screen.get("x", 0.0)), y=float(screen.get("y", 0.0))),
+                frame=pb.Vec(x=float(frame.get("x", 0.0)), y=float(frame.get("y", 0.0))),
+                error=float(item.get("error", 0.0)),
+            ))
+        residual = result.get("residual")
+        if residual:
+            reply.residual.CopyFrom(pb.Residual(
+                rmse=float(residual.get("rmse", 0.0)),
+                max=float(residual.get("max", 0.0)),
+            ))
+        origin = result.get("origin")
+        if origin:
+            reply.origin.CopyFrom(pb.Vec(
+                x=float(origin.get("x", 0.0)), y=float(origin.get("y", 0.0)),
+            ))
+        return reply
+
     def StreamScreenshots(self, request, context):
         self._check_auth(context)
         args = self._shot_args(request.shot) if request.HasField("shot") else {}

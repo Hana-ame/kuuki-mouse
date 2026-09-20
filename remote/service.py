@@ -67,6 +67,27 @@ def _as_str(value: Any, name: str, default: str = "") -> str:
     return str(value)
 
 
+def _as_bool(value: Any, default: bool = False) -> bool:
+    """把 ``True`` / ``1`` / ``"true"`` / ``"no"`` 这类写法归一成 bool。
+
+    不能只写 ``bool(args.get("x"))``: 那样 ``"false"`` 也会被判成 True。跨了
+    JSON / protobuf 两道序列化之后 bool 变字符串是很常见的事 (PeerJS 只走 JSON,
+    手写调试也常常给 ``--restore false``), 所以显式认一遍再报错。
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("true", "1", "yes", "y", "on"):
+        return True
+    if text in ("false", "0", "no", "n", "off", ""):
+        return False
+    raise RemoteError("bad_request", f"参数应是 true/false, 收到 {value!r}")
+
+
 def parse_points(value: Any) -> list:
     """把路径点归一成 ``[[x, y], ...]``。
 
@@ -126,6 +147,7 @@ class RemoteService:
             "info": self._op_info,
             "screen.size": self._op_screen_size,
             "screen.screenshot": self._op_screen_screenshot,
+            "screen.calibrate": self._op_screen_calibrate,
             "mouse.position": self._op_mouse_position,
             "mouse.move": self._op_mouse_move,
             "mouse.move_rel": self._op_mouse_move_rel,
@@ -152,6 +174,8 @@ class RemoteService:
             "screenshot": "screen.screenshot",
             "capture": "screen.screenshot",
             "size": "screen.size",
+            "calibrate": "screen.calibrate",
+            "calib": "screen.calibrate",
             "position": "mouse.position",
             "move": "mouse.move",
             "move_rel": "mouse.move_rel",
@@ -296,6 +320,28 @@ class RemoteService:
             payload["image_b64"] = base64.b64encode(data).decode("ascii")
         payload["ok"] = True
         return payload
+
+    def _op_screen_calibrate(self, args: dict) -> dict:
+        """跑一次坐标校准 —— 见 ``remote/calibrate.py`` 的模块说明。
+
+        **会动鼠标**: 要移过去才知道"图上的 (x,y)"到底对应"屏幕的哪个点"。
+        默认 ``restore=true`` 把光标挪回原位。
+        """
+        from . import calibrate
+
+        return calibrate.run(
+            self.screen,
+            self.controller,
+            cols=_as_int(args.get("cols"), "cols", 3),
+            rows=_as_int(args.get("rows"), "rows", 3),
+            margin=_as_float(args.get("margin"), "margin", 0.12),
+            settle=_as_float(args.get("settle"), "settle", 0.1),
+            tolerance=_as_float(args.get("tolerance"), "tolerance", 2.0),
+            # 0 与 None 都表示"不缩放": 这里不存在"显式 0 是别的意思",
+            # 直接用 0 当缺省, 免得又搞一个 optional 字段
+            max_width=_as_int(args.get("max_width"), "max_width", 0) or None,
+            restore=_as_bool(args.get("restore"), True),
+        )
 
     # ---------------- 鼠标 ----------------
     def _op_mouse_position(self, args: dict) -> dict:

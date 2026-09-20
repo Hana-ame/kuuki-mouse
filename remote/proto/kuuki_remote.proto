@@ -89,6 +89,94 @@ message StreamScreenshotsRequest {
   int32 count = 4;         // 0 = 一直推到客户端取消
 }
 
+// ---------------------------------------------------------------- 坐标校准
+//
+// "图坐标 -> 鼠标坐标"这条换算有两个隐含假设: 截图是屏幕的**均匀缩放**, 而且
+// **图左上角就是鼠标坐标的 (0,0)**。后者在多显示器上常常不成立 —— Windows 虚拟
+// 桌面允许负坐标, 副屏摆在主屏左边时它从负数开始。这时整屏的坐标都差同一个
+// 平移量, 而且看不出来: 乘出来的数字看着很合理。
+//
+// Calibrate 把这条换算**实测**出来: 移鼠标 -> 截图时把光标画上 -> 在图上认出
+// 标记 -> 拟合表坐标 -> 报告残差。见 remote/calibrate.py。
+//
+// 字段结构**故意**与那边返回的 dict 一模一样: 控制端会把 protobuf 转成 dict
+// 与 WS 的返回值逐条比对 (``test_new_ops_agree_across_transports``), 形状不同
+// 就等于两条传输行为不同。
+
+message Vec {
+  double x = 1;
+  double y = 2;
+}
+
+message Size {
+  int32 width = 1;
+  int32 height = 2;
+}
+
+message CalibrateRequest {
+  int32 cols = 1;          // 靶点网格列数 (0 = 服务端默认 3)
+  int32 rows = 2;          // 行数 (0 = 默认 3); 两轴都得 >1 才拟合得出斜率
+  double margin = 3;       // 留边比例 (0 = 默认 0.12); 贴边时光标标记会被裁一半
+  double settle = 4;       // 移过去后等多久再抓帧 (0 = 默认 0.1s)
+  double tolerance = 5;    // 判定"没偏"的残差上限 (0 = 默认 2px)
+  int32 max_width = 6;     // 顺带按这个宽度做缩放校准 (0 = 不缩放)
+  optional bool restore = 7;  // 结束后把鼠标挪回原位 (缺省 true)
+}
+
+message CalibrationSample {
+  Vec screen = 1;          // 鼠标被告知要去的地方
+  Vec frame = 2;           // 标记实际落在图上的位置
+}
+
+message CalibrationMiss {
+  Vec screen = 1;
+  string reason = 2;       // no_marker: 这一帧里没认出光标标记
+}
+
+message CalibrationOutlier {
+  // 认出来但**没被采信**的点: 屏幕上动的东西不止光标, 认错是常态, 靠多数投票
+  // 挑一致的那些点拟合, 剩下的列在这里 —— 只给个残差的话, 调用方没法自己复查。
+  Vec screen = 1;
+  Vec frame = 2;
+  double error = 3;        // 与拟合模型的偏离 (像素)
+}
+
+message CalibrationFit {
+  double ax = 1;           // screen_x = ax * frame_x + bx
+  double bx = 2;
+  double ay = 3;
+  double by = 4;
+  double rmse = 5;         // 残差 —— 拟合任何时候都算得出来, 它才说明能不能信
+  double max_abs = 6;
+  int32 count = 7;
+}
+
+message Residual {
+  double rmse = 1;
+  double max = 2;          // 逐点误差的最大圆距离
+}
+
+message CalibrateReply {
+  bool ok = 1;
+  string verdict = 2;      // aligned / drifted / too_few_samples
+  string advice = 3;
+  Size screen = 4;
+  int32 requested = 5;
+  int32 sampled = 6;
+  repeated CalibrationMiss missed = 7;
+  int32 max_width = 8;
+  double tolerance = 9;
+  bool restored = 10;
+  CalibrationFit calibration = 11;
+  repeated CalibrationSample samples = 12;
+  double declared_scale = 13;  // 帧头声明的系数 (vision.scale_of)
+  double fit_scale = 14;       // 拟合出来的系数
+  double scale_drift = 15;     // 两者之差占比
+  Vec origin = 16;             // 图左上角对应的鼠标坐标 (多显示器时不是 0,0)
+  Residual residual = 17;
+  repeated CalibrationOutlier outliers = 18;  // 拟合时被剔除的点
+}
+
 // ---------------------------------------------------------------- 鼠标
 
 message MoveMouseRequest {
@@ -271,6 +359,8 @@ service RemoteControl {
   // 截屏
   rpc Screenshot(ScreenshotRequest) returns (Image);
   rpc StreamScreenshots(StreamScreenshotsRequest) returns (stream Image);
+  // 坐标校准: 实测"图坐标 -> 鼠标坐标" (会动鼠标, restore 缺省 true)
+  rpc Calibrate(CalibrateRequest) returns (CalibrateReply);
 
   // 鼠标
   rpc GetMousePosition(Empty) returns (Point);

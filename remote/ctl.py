@@ -877,6 +877,17 @@ def build_parser() -> argparse.ArgumentParser:
     focus.add_argument("--process", default="", help="进程名或 pid 子串")
     focus.add_argument("--index", type=int, default=0, help="命中多个时取第几个")
     focus.add_argument("--wait", type=float, default=None, help="切换后最多等多久确认")
+
+    # 坐标校准: 每台被控机的屏幕布局可能不同 (尤其多显示器), 编排前先在目标机上
+    # 跑一次, 拿到的 fit 可以喂给 client 的 locate --calib。会动鼠标。
+    calib = _add_action(sub, "calibrate", "实测这台机器的图坐标<->鼠标坐标换算")
+    calib.add_argument("--cols", type=int, default=3, help="靶点网格列数")
+    calib.add_argument("--rows", type=int, default=3, help="靶点网格行数")
+    calib.add_argument("--margin", type=float, default=0.12, help="留边比例")
+    calib.add_argument("--settle", type=float, default=0.1, help="移动后等多久再抓帧")
+    calib.add_argument("--tolerance", type=float, default=2.0, help="判定没偏的残差上限")
+    calib.add_argument("--max-width", type=int, default=0, help="顺带做缩放校准")
+    calib.add_argument("--no-restore", action="store_true", help="不把鼠标挪回原位")
     return parser
 
 
@@ -1002,6 +1013,16 @@ def _machine_op(args: argparse.Namespace) -> Tuple[str, dict]:
         if not payload["title"] and not payload["process"] and "hwnd" not in payload:
             raise ValueError("focus 需要 --hwnd / --title / --process 之一")
         return "window.focus", payload
+    if command == "calibrate":
+        return "screen.calibrate", {
+            "cols": int(args.cols or 0),
+            "rows": int(args.rows or 0),
+            "margin": float(args.margin or 0),
+            "settle": float(args.settle or 0),
+            "tolerance": float(args.tolerance or 0),
+            "max_width": int(args.max_width or 0),
+            "restore": not bool(args.no_restore),
+        }
     raise ValueError(f"未知命令 {command!r}")
 
 

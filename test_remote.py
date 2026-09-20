@@ -709,6 +709,9 @@ NEW_OP_CASES = [
     ("keyboard.hotkey", {"keys": "ctrl+shift+s"}),
     ("keyboard.combo", {"keys": "ctrl+shift+s", "hold_ms": 5}),
     ("keyboard.hold", {"key": "f2", "ms": 5}),
+    # calibrate 返回值里有 fit / 残差 / 样本表一串浮点数与 optional bool —— 结构
+    # 对不齐的地方会在这条用例上一次性暴露出来
+    ("screen.calibrate", {"cols": 2, "rows": 2, "settle": 0, "restore": False}),
 ]
 
 
@@ -2192,3 +2195,237 @@ def test_locate_result_describe_mode_and_bad_color():
     with pytest.raises(ValueError):
         _locate_result(Namespace(**{**base, "describe": False, "color": "zzz"}),
                        payload, {"width": img.width, "height": img.height})
+
+
+# ================================================================ 坐标校准 (P2)
+#
+# "图坐标 -> 鼠标坐标"这条换算不能只靠相信: 多显示器上虚拟桌面允许负坐标, 于是
+# 整屏差同一个平移量, 而每个乘出来的数字看着都很合理。calibrate 用闭环把它实测
+# 出来 —— 移鼠标 -> 画光标抓帧 -> 认标记 -> 拟合 -> 报告残差。
+#
+# 这里的用例全部跑在假屏幕 + 假鼠标上: 假屏是纯内存画图, 两帧之间除了光标标记
+# 没有任何别的变化, 所以认标记这一步是确定的, 拟合结果可以卡到 0.05 以内。
+
+
+def test_calibration_fit_recovers_scale_and_offset():
+    from remote.calibrate import Sample, fit
+
+    # screen_x = 2 * frame_x + 0, screen_y = 2 * frame_y + 120 —— 平移项也不放过
+    samples = [
+        Sample(screen_x=100 + 20 * i, screen_y=200 + 20 * i,
+               frame_x=50 + 10 * i, frame_y=40 + 10 * i)
+        for i in range(4)
+    ]
+    calib = fit(samples)
+    assert (calib.ax, calib.ay) == (pytest.approx(2.0), pytest.approx(2.0))
+    assert (calib.bx, calib.by) == (pytest.approx(0.0), pytest.approx(120.0))
+    assert calib.count == 4
+    # 样本本身是精确线性的: 残差必须是 0, 不是"很小"
+    assert calib.rmse == pytest.approx(0.0, abs=1e-9)
+
+
+def test_calibration_offset_is_the_frame_origin():
+    """多显示器: 图的 (0,0) 对应鼠标的 (-1920, 0)。"""
+    from remote.calibrate import Sample, fit
+
+    calib = fit([
+        Sample(screen_x=-1920 + 2 * i, screen_y=2 * i, frame_x=i, frame_y=i)
+        for i in range(4)
+    ])
+    assert calib.offset == (pytest.approx(-1920.0), pytest.approx(0.0))
+    assert calib.to_screen(0, 0) == (-1920, 0)
+    assert calib.to_frame(-1920, 0) == (0, 0)
+
+
+def test_calibration_rejects_degenerate_samples():
+    from remote.calibrate import CalibrationError, Sample, fit
+
+    # 两点连成一条直线, 没有多余观测 —— 认错标记也发现不了
+    with pytest.raises(CalibrationError) as few:
+        fit([Sample(0, 0, 1, 1), Sample(1, 1, 2, 2)])
+    assert "样本" in str(few.value)
+
+    # 一轴全同 -> 那一轴没有斜率可言
+    flat = [Sample(screen_x=10, screen_y=3 * i, frame_x=5, frame_y=i) for i in range(4)]
+    with pytest.raises(CalibrationError) as axis:
+        fit(flat)
+    assert "x" in str(axis.value)
+
+
+def test_calibration_dict_roundtrip():
+    from remote.calibrate import Calibration
+
+    calib = Calibration(ax=2.0, bx=-1920.0, ay=1.5, by=8.0, rmse=0.4, max_abs=0.9, count=9)
+    restored = Calibration.from_dict(calib.to_dict())
+    assert restored == calib
+    assert restored.to_screen(10, 10) == calib.to_screen(10, 10)
+
+
+def test_plan_points_respects_ratio_and_pixel_margin():
+    from remote.calibrate import plan_points
+
+    grid = plan_points(1000, 800, cols=3, rows=3, margin=0.1)
+    assert len(grid) == 9 and len(set(grid)) == 9
+    assert min(p[0] for p in grid) == 100 and max(p[0] for p in grid) == 900
+    assert min(p[1] for p in grid) == 80 and max(p[1] for p in grid) == 720
+
+    # 像素下限压过比例: 标记是按**图**坐标画的, 缩放后 12% 可能不够一个臂长
+    padded = plan_points(1000, 800, cols=2, rows=2, margin=0.0, min_margin=50)
+    assert min(p[0] for p in padded) == 50
+    # 单轴也能排 (那一轴拟合会失败, 但排点本身不许炸)
+    single = plan_points(1000, 800, cols=1, rows=3, margin=0.0)
+    assert len(single) == 3 and {p[0] for p in single} == {500}
+
+
+def test_calibrate_op_closes_the_loop_on_fake_screen(tmp_path):
+    from remote.calibrate import Calibration
+
+    controller, mouse, _ = fake_controller(start=(11, 22))
+    # 200x100 的假屏按 100 宽来抓 -> 声明的缩放系数是 2.0
+    service = RemoteService(screen=fake_screen(200, 100), controller=controller)
+    report = service.handle(
+        "screen.calibrate", {"cols": 3, "rows": 3, "settle": 0, "max_width": 100}
+    )
+    assert report["ok"] and report["verdict"] == "aligned"
+    assert report["sampled"] == report["requested"] == 9
+    assert report["missed"] == []
+    calib = Calibration.from_dict(report["calibration"])
+    # 拟合出来的系数必须就是帧头声明的那个, 平移项接近 0 (这台"机器"没有负坐标)
+    assert calib.ax == pytest.approx(2.0, abs=0.02)
+    assert report["declared_scale"] == pytest.approx(2.0)
+    assert abs(calib.bx) < 1.0 and abs(calib.by) < 1.0
+    # 会动鼠标, 所以必须给挪回去 —— 悄悄把人家光标留在角落最招人烦
+    assert report["restored"] is True
+    assert mouse.position == (11, 22)
+
+    # 不缩放时应当是精确的恒等映射 (残差 0)
+    native = service.handle("screen.calibrate", {"cols": 3, "rows": 3, "settle": 0})
+    assert native["declared_scale"] == pytest.approx(1.0)
+    assert native["residual"]["max"] == pytest.approx(0.0, abs=0.51)
+
+
+def test_calibrate_op_reports_too_few_samples_instead_of_guessing():
+    """帧里压根没画上光标标记: 不能凑出一个"Noise 拟合", 要说清楚没法做。"""
+    service = RemoteService(screen=fake_screen(200, 100), controller=fake_controller()[0])
+    screen = service.screen
+    original = screen.capture
+    # 模拟"这一帧没有标记" (受控端改了颜色 / 标记被别的窗口盖住 / 锁屏)
+    screen.capture = lambda **kwargs: original(**{**kwargs, "draw_cursor": False})
+
+    report = service.handle("screen.calibrate", {"cols": 2, "rows": 2, "settle": 0})
+    assert report["verdict"] == "too_few_samples"
+    assert report["ok"] is False
+    assert report["sampled"] == 0 and len(report["missed"]) == 4
+    # 样本不足时不给 calibration / samples, 免得调用方拿一个假的去换算
+    assert "calibration" not in report and "samples" not in report
+
+
+def test_calibrate_op_validates_arguments():
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    with pytest.raises(RemoteError) as bad:
+        service.handle("screen.calibrate", {"cols": "many"})
+    assert bad.value.code == "bad_request"
+    # restore 认字符串 "false": 跨 JSON/protobuf 两道序列化之后 bool 常变成字符串
+    result = service.handle(
+        "screen.calibrate", {"cols": 2, "rows": 2, "settle": 0, "restore": "false"}
+    )
+    assert result["restored"] is False
+
+
+def test_grid_overlay_marks_and_saves(tmp_path):
+    from PIL import Image
+
+    from remote import vision
+
+    img, _ = _synthetic(size=(120, 60))
+    out = vision.grid_overlay(img, cols=4, rows=2, label=True)
+    assert out.size == img.size
+    # 画了东西进去, 但不许改动原帧 —— 原帧往往还要接着做别的判定
+    assert out.tobytes() != img.tobytes()
+    blank = Image.new("RGB", (120, 60), (255, 255, 255))
+    assert blank.tobytes() != out.tobytes()
+
+    path = str(tmp_path / "grid" / "evidence.png")
+    marked = vision.grid_overlay(
+        img, cols=4, rows=2, marks=[{"x": 60, "y": 30, "text": "target"}], path=path
+    )
+    assert os.path.exists(path)
+    assert vision.load(path).size == (120, 60)
+    # 网格线 + 标签 + 十字都画上去了: 有标记的那版比只有网格的那版改动更多
+    assert marked.tobytes() != out.tobytes()
+
+
+def test_fit_robust_ignores_misidentified_markers():
+    """真机翻过车的场景: 9 个点里 4 个把别的动态东西认成了十字标记。
+
+    屏幕上动的东西不止光标 —— 动画、进度指示器、视频里的红 logo, 尺寸凑巧接近
+    就会混进来。这时候**直接拟合会给出一个看起来完整实则全错的结果** (实测系数
+    差 19%), 所以拟合必须先把这些点挑出去。
+    """
+    from remote.calibrate import Sample, fit_robust
+
+    good = [
+        Sample(screen_x=100 + 2 * i, screen_y=200 + 2 * i,
+               frame_x=50 + i, frame_y=40 + i)
+        for i in range(5)
+    ]
+    # 认错的点: 鼠标坐标集中在别处, 彼此也对不上 (这是认错标记的典型特征)
+    bad = [Sample(screen_x=640, screen_y=480, frame_x=17 + i, frame_y=23 + i)
+           for i in range(4)]
+
+    calib, outliers = fit_robust(good + bad, threshold=2.0)
+    assert (calib.ax, calib.ay) == (pytest.approx(2.0), pytest.approx(2.0))
+    assert (calib.bx, calib.by) == (pytest.approx(0.0), pytest.approx(120.0))
+    # 只用一致的那 5 个点拟合, 另外 4 个点连同它们的误差一起被点名
+    assert calib.count == 5
+    assert len(outliers) == 4
+    assert all(error > 2.0 for _, error in outliers)
+
+
+def test_fit_robust_refuses_when_less_than_half_agree():
+    """垃圾数据也必须拒绝: 三点总能算出一条直线, 但那不叫标定。"""
+    from remote.calibrate import CalibrationError, Sample, fit_robust
+
+    # 每个点各自服从不同的映射 —— 互相之间凑不出多数一致
+    junk = [
+        Sample(screen_x=(i * i) % 11 * 40, screen_y=(i * 7) % 13 * 30,
+               frame_x=2 * i, frame_y=3 * i)
+        for i in range(8)
+    ]
+    with pytest.raises(CalibrationError) as exc:
+        fit_robust(junk, threshold=2.0)
+    assert "一致" in str(exc.value)
+
+
+def test_calibrate_op_lists_outliers_instead_of_letting_them_skew_the_fit():
+    """走完整 op: 塞一个离群点进去, 报告要把它点出来, 且系数不受它影响。"""
+    from remote import calibrate
+    from remote.calibrate import Calibration
+
+    controller, _, _ = fake_controller()
+    service = RemoteService(screen=fake_screen(400, 300), controller=controller)
+    real_marker = calibrate.find_marker
+
+    def with_one_bad_marker(before, after, **kwargs):
+        """第 3 个采样点上返回一个明显偏了的 center —— 模拟认错标记。"""
+        center, info = real_marker(before, after, **kwargs)
+        if with_one_bad_marker.calls == 2:
+            center = (center[0] + 90, center[1] + 60) if center else None
+        with_one_bad_marker.calls += 1
+        return center, info
+
+    with_one_bad_marker.calls = 0
+    calibrate.find_marker = with_one_bad_marker
+    try:
+        report = service.handle(
+            "screen.calibrate", {"cols": 3, "rows": 3, "settle": 0, "max_width": 200}
+        )
+    finally:
+        calibrate.find_marker = real_marker
+
+    assert report["verdict"] == "aligned"
+    assert len(report["outliers"]) == 1
+    calib = Calibration.from_dict(report["calibration"])
+    # 8 个好点决定的系数: 400 宽的屏按 200 宽抓 -> 2.0
+    assert calib.ax == pytest.approx(2.0, abs=0.02)
+    assert calib.count == 8

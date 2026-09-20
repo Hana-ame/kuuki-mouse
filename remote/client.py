@@ -284,6 +284,26 @@ class GrpcClient:
             request.wait = float(args["wait"])
         return request
 
+    def _calibrate_request(self, args: dict):
+        """``screen.calibrate`` 参数 -> protobuf。
+
+        标量为 0 的一律按"没给"走服务端默认 (``cols`` / ``rows`` / ``margin`` …
+        都不存在"显式 0 另有含义")。只有 ``restore`` 是真 bool 语义: 显式 false
+        要能表达"别把我光标挪回去", 所以它在 proto 里是 optional。
+        """
+        pb = self._pb
+        request = pb.CalibrateRequest(
+            cols=int(args.get("cols", 0) or 0),
+            rows=int(args.get("rows", 0) or 0),
+            margin=float(args.get("margin", 0) or 0),
+            settle=float(args.get("settle", 0) or 0),
+            tolerance=float(args.get("tolerance", 0) or 0),
+            max_width=int(args.get("max_width", 0) or 0),
+        )
+        if args.get("restore") is not None:
+            request.restore = bool(args["restore"])
+        return request
+
     def _drag_request(self, args: dict):
         pb = self._pb
         request = pb.DragRequest(button=args.get("button", "left"))
@@ -433,6 +453,9 @@ class GrpcClient:
             "window.focus": lambda: self.stub.FocusWindow(
                 self._focus_request(args), **self._kwargs()
             ),
+            "screen.calibrate": lambda: self.stub.Calibrate(
+                self._calibrate_request(args), **self._kwargs()
+            ),
             "notify": lambda: self.stub.Notify(
                 pb.NotifyRequest(
                     message=args.get("message", args.get("text", "")),
@@ -539,6 +562,16 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     win.add_argument("--limit", type=int, default=0, help="最多列几个 (0 = 不限)")
     win.add_argument("--include-hidden", action="store_true", help="连隐藏窗口一起列")
 
+    cal = sub.add_parser("calibrate", help="实测图坐标<->鼠标坐标的换算 (会动鼠标)")
+    cal.add_argument("--cols", type=int, default=3, help="靶点网格列数")
+    cal.add_argument("--rows", type=int, default=3, help="靶点网格行数")
+    cal.add_argument("--margin", type=float, default=0.12, help="留边比例 (贴边标记会被裁)")
+    cal.add_argument("--settle", type=float, default=0.1, help="移过去后等多久再抓帧 (秒)")
+    cal.add_argument("--tolerance", type=float, default=2.0, help="判定没偏的残差上限 (像素)")
+    cal.add_argument("--max-width", type=int, default=0, help="顺带按这个宽度做缩放校准")
+    cal.add_argument("--no-restore", action="store_true", help="校准后不把鼠标挪回原位")
+    cal.add_argument("--save", default=None, help="把拟合结果存成 json, 供 locate 用")
+
     foc = sub.add_parser("focus", help="把某个窗口切到前台")
     foc.add_argument("--hwnd", type=int, default=None, help="直接给窗口句柄 (最可靠)")
     foc.add_argument("--title", default="", help="标题子串")
@@ -576,6 +609,7 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     loc.add_argument("--threshold", type=float, default=0.85, help="模板匹配得分下限")
     loc.add_argument("--top", type=int, default=10, help="最多返回几个")
     loc.add_argument("--save-frame", default=None, help="把这帧存盘, 供下次 --diff-with")
+    loc.add_argument("--calib", default=None, help="用 calibrate --save 的 json 换算坐标")
     _add_shot_args(loc)
 
 
@@ -609,6 +643,42 @@ def _focus_args(args: argparse.Namespace) -> dict:
     return out
 
 
+def _calibrate_args(args: argparse.Namespace) -> dict:
+    """``calibrate`` 子命令 -> ``screen.calibrate`` 的 args。
+
+    标量默认值这里的 0 与服务端默认一致, 所以可以直接传。``restore`` 反过来走
+    ``--no-restore``: 默认行为是"校准完把光标挪回去", 写成一个需要显式关掉的
+    开关比一个容易忘加的 flag 安全。
+    """
+    return {
+        "cols": int(args.cols or 0),
+        "rows": int(args.rows or 0),
+        "margin": float(args.margin or 0),
+        "settle": float(args.settle or 0),
+        "tolerance": float(args.tolerance or 0),
+        "max_width": int(args.max_width or 0),
+        "restore": not bool(getattr(args, "no_restore", False)),
+    }
+
+
+def _print_calibration(result: dict, path: Optional[str] = None) -> None:
+    """打印报告; 给了 ``path`` 就把 fit 存成 json 供 ``locate --calib`` 读。"""
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if not path or not result.get("calibration"):
+        return
+    payload = {
+        "calibration": result["calibration"],
+        "screen": result.get("screen"),
+        "declared_scale": result.get("declared_scale"),
+        "max_width": result.get("max_width"),
+        "verdict": result.get("verdict"),
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    print(f"校准结果已写入 {path} —— 之后 locate --calib {path} 就用它换算")
+
+
 def _locate_result(
     args: argparse.Namespace, payload: bytes, header: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -623,12 +693,18 @@ def _locate_result(
     region = None
     if getattr(args, "region", None):
         region = tuple(int(v) for v in args.region.split(","))
+    # --calib 给了就用**实测**出来的换算 (缩放 + 平移), 没给才退回帧头声明的系数。
+    # 两者差的那个平移项在多显示器上不是 0, 只用帧头会整体点偏。
+    calib = _load_calibration(getattr(args, "calib", None))
 
     out: Dict[str, Any] = {
         "mode": "describe",
         "scale": round(scale, 4),
         "frame": {"width": image.width, "height": image.height},
         "source_width": header.get("source_width"),
+        # 告诉调用方这次的 screen 坐标是哪来的 —— 两个数算出来不一样的时候,
+        # 这是唯一能解释为什么的字段
+        "coord_source": "calibration" if calib else "frame_header",
         "matches": [],
     }
 
@@ -669,12 +745,42 @@ def _locate_result(
     else:
         out["mode"] = "describe"
         blocks = vision.describe_grid(image, scale=scale)
+        # 网格概览也会带 screen 坐标, 校准过就一并换成实测值 —— 否则同一份输出
+        # 里两种换算混着, 用的人不知道该信哪个
+        if calib is not None:
+            for block in blocks:
+                cx, cy = block["center"]["x"], block["center"]["y"]
+                block["screen"] = dict(zip(("x", "y"), calib.to_screen(cx, cy)))
         out["matches"] = blocks
         return out
 
+    if calib is not None:
+        for rect in rects:
+            cx, cy = rect.center
+            screen_x, screen_y = calib.to_screen(cx, cy)
+            item = rect.to_dict(scale)
+            item["screen"] = {"x": screen_x, "y": screen_y}
+            out["matches"].append(item)
+        return out
     out["mode"] = mode
     out["matches"] = [r.to_dict(scale) for r in rects]
     return out
+
+
+def _load_calibration(path: Optional[str]):
+    """读一份 ``calibrate --save`` 产出的 json, 失败就当没给 (而不是崩掉)。"""
+    if not path:
+        return None
+    from remote.calibrate import Calibration
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except OSError as exc:
+        raise ValueError(f"读不了校准文件 {path}: {exc}") from exc
+    if "calibration" not in data:
+        raise ValueError(f"{path} 不像校准结果 (缺 calibration 字段)")
+    return Calibration.from_dict(data["calibration"])
 
 
 def _add_shot_args(parser: argparse.ArgumentParser) -> None:
@@ -754,6 +860,10 @@ async def _run_ws(args: argparse.Namespace) -> int:
             result = await client.call("window.focus", _focus_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
+        if args.action == "calibrate":
+            result = await client.call("screen.calibrate", _calibrate_args(args))
+            _print_calibration(result, args.save)
+            return 0
         if args.action == "screenshot":
             header, payload = await client.screenshot(_shot_args(args))
             path = args.path
@@ -814,6 +924,10 @@ def _run_grpc(args: argparse.Namespace) -> int:
         if args.action == "focus":
             result = client.call("window.focus", _focus_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "calibrate":
+            result = client.call("screen.calibrate", _calibrate_args(args))
+            _print_calibration(result, args.save)
             return 0
         if args.action == "screenshot":
             payload = client.screenshot(_shot_args(args))
@@ -904,6 +1018,10 @@ async def _run_peerjs(args: argparse.Namespace) -> int:
         if args.action == "focus":
             result = await client.call("window.focus", _focus_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "calibrate":
+            result = await client.call("screen.calibrate", _calibrate_args(args))
+            _print_calibration(result, args.save)
             return 0
         if args.action == "screenshot":
             payload = await client.screenshot(_shot_args(args))

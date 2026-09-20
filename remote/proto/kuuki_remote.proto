@@ -393,6 +393,69 @@ message MonitorsReply {
   optional uint32 primary_index = 4;
 }
 
+// ---------------------------------------------------------------- 文字识别 (OCR)
+//
+// 视觉定位只能说"屏幕上有一块像输入框的东西", 说不出里面写着什么 —— OCR 补的
+// 就是这一层。用系统内置的 ``Windows.Media.Ocr`` (见 remote/ocr.py), 所以只有
+// Windows 受控端有; 别的平台回 ``unsupported``。
+//
+// 矩形用 x/y/w/h 而不是复上面的 ``Rect``: 控制端会把 protobuf 转成 dict 与 WS
+// 那条传输逐字段比对 (``test_new_ops_agree_across_transports``), 键名不同就等于
+// 两条传输返回了不同的东西 —— 而 service 的 dict 里这一层就叫 x/y/w/h。
+
+message OcrRect {
+  int32 x = 1;
+  int32 y = 2;
+  int32 w = 3;
+  int32 h = 4;
+}
+
+message OcrWord {
+  string text = 1;
+  int32 x = 2;             // 图坐标 (这一帧被缩放/裁剪后的像素)
+  int32 y = 3;
+  int32 w = 4;
+  int32 h = 5;
+  OcrRect screen = 6;      // 虚拟桌面坐标 —— 直接拿去点的那个
+}
+
+message OcrLine {
+  string text = 1;
+  int32 x = 2;
+  int32 y = 3;
+  int32 w = 4;
+  int32 h = 5;
+  OcrRect screen = 6;
+  // 行矩形是这一行所有词的外接盒 —— WinRT 的 OcrLine 自己没有 BoundingRect,
+  // 只有 OcrWord 有, 所以词是这一层的**原始信息**, 行是算出来的。
+  repeated OcrWord words = 7;
+}
+
+message OcrRequest {
+  Rect region = 1;         // 只认这一块 (帧内坐标, 与 ScreenshotRequest 同口径)
+  // 认哪一块屏: 两个都不给 = 主显示器。optional 是因为 0 是合法下标
+  optional uint32 monitor = 2;
+  optional bool all_screens = 3;
+  // 语言 tag (``zh-Hans-CN`` / ``en-US``); 空 = 按受控端用户的语言偏好挑。
+  // 给了就**只用**它, 没装对应语言包直接报错, 不悄悄换引擎 —— 换了的表现是
+  // 中文被当别的语言认, 调用方完全看不出来。
+  string lang = 4;
+  // 要不要逐词的矩形。默认要给 (词才是能点的粒度), 关掉能省不少体积。
+  optional bool include_words = 5;
+}
+
+message OcrReply {
+  bool ok = 1;
+  string text = 2;         // 全部行文本, 用换行拼起来
+  string language = 3;     // 实际用的语言 tag
+  repeated OcrLine lines = 4;
+  int32 count = 5;
+  int32 width = 6;         // 被识别的那一帧的尺寸
+  int32 height = 7;
+  double scale = 8;        // 帧相对原图的缩放系数 (1 = 没缩)
+  Point origin = 9;        // 帧左上角在虚拟桌面里的位置 (多屏时不是 0,0)
+}
+
 // ---------------------------------------------------------------- 服务
 
 service RemoteControl {
@@ -429,6 +492,8 @@ service RemoteControl {
 
   // 显示器与虚拟桌面边界 (多屏校准的前置信息; 目前仅 Windows 受控端)
   rpc Monitors(MonitorsRequest) returns (MonitorsReply);
+  // 认屏幕上的字 (系统内置 OCR; 目前仅 Windows 受控端)
+  rpc Ocr(OcrRequest) returns (OcrReply);
 
   // 窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
   rpc ListWindows(ListWindowsRequest) returns (ListWindowsReply);

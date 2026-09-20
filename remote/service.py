@@ -148,6 +148,7 @@ class RemoteService:
             "screen.size": self._op_screen_size,
             "screen.monitors": self._op_screen_monitors,
             "screen.screenshot": self._op_screen_screenshot,
+            "screen.ocr": self._op_screen_ocr,
             "screen.calibrate": self._op_screen_calibrate,
             "mouse.position": self._op_mouse_position,
             "mouse.move": self._op_mouse_move,
@@ -174,6 +175,8 @@ class RemoteService:
         self.aliases = {
             "screenshot": "screen.screenshot",
             "capture": "screen.screenshot",
+            "ocr": "screen.ocr",
+            "read": "screen.ocr",
             "size": "screen.size",
             "monitors": "screen.monitors",
             "monitor": "screen.monitors",
@@ -356,6 +359,78 @@ class RemoteService:
             payload["image_b64"] = base64.b64encode(data).decode("ascii")
         payload["ok"] = True
         return payload
+
+    def _op_screen_ocr(self, args: dict) -> dict:
+        """认出这一屏上的**文字** (Windows 内置 OCR) —— 见 ``remote/ocr.py``。
+
+        视觉定位 (``locate`` / ``remote/vision.py``) 只能说"这里有一块像输入框的
+        东西", 说不出里面写着什么。这一层把"图上有什么字"补上, 而且每行都给出
+        **能直接点的屏幕坐标**, 于是"找到写着'发送'的那块并点它"一次调用就能闭环。
+
+        坐标换算的三步 (缩放 / 裁剪 / 帧原点) 全在这里做掉: 调用方拿到的是鼠标
+        坐标系里的数, 不需要自己再乘系数 —— 那个乘法漏一次就点偏一整块屏 (踩过,
+        见 ``docs/knowledge/gui-screenshot-scale.md``)。
+        """
+        from . import ocr
+
+        if not ocr.ocr_supported():
+            raise RemoteError("unsupported", "文字识别需要被控端是 Windows (走系统内置 OCR)")
+        # OCR 吃的帧强制 png: 调用方指定 jpeg/webp 是为了省带宽, 但压缩噪声会直接
+        # 变成认错的字。这一帧不回给调用方, 编码格式的取舍只该由识别质量决定。
+        shot = dict(args)
+        shot["format"] = "png"
+        capture, data = self.capture(shot)
+        try:
+            result = ocr.recognize(data, lang=_as_str(args.get("lang"), "lang", ""))
+        except ocr.OcrError as exc:
+            raise RemoteError(exc.code, exc.message)
+
+        include_words = _as_bool(args.get("include_words"), True)
+        offset = (capture.region.left, capture.region.top) if capture.region else (0, 0)
+        lines = []
+        for line in result.get("lines") or []:
+            item: Dict[str, Any] = {
+                "text": line["text"],
+                "x": line["x"],
+                "y": line["y"],
+                "w": line["w"],
+                "h": line["h"],
+                # 行中心那一点的屏幕坐标 —— 大多数时候要点的就是这个
+                "screen": ocr.to_screen_rect(line, capture.scale, capture.origin, offset),
+            }
+            # "词"这个键**永远给** (不要词的时候给空列表): protobuf 的空 repeated
+            # 字段在 MessageToDict 里照样会出现 (``"words": []``), 而 WS 侧是普通
+            # dict —— 一边给空列表、一边不给键, 跨传输比对就红了 (就是
+            # test_new_ops_agree_across_transports 抓出来的那种不一致)。
+            item["words"] = (
+                [
+                    {
+                        "text": word["text"],
+                        "x": word["x"],
+                        "y": word["y"],
+                        "w": word["w"],
+                        "h": word["h"],
+                        "screen": ocr.to_screen_rect(
+                            word, capture.scale, capture.origin, offset
+                        ),
+                    }
+                    for word in line.get("words") or []
+                ]
+                if include_words
+                else []
+            )
+            lines.append(item)
+        return {
+            "ok": True,
+            "text": result.get("text", ""),
+            "language": result.get("language", ""),
+            "lines": lines,
+            "count": len(lines),
+            "width": capture.width,
+            "height": capture.height,
+            "scale": round(float(capture.scale), 4),
+            "origin": {"x": int(capture.origin[0]), "y": int(capture.origin[1])},
+        }
 
     def _op_screen_calibrate(self, args: dict) -> dict:
         """跑一次坐标校准 —— 见 ``remote/calibrate.py`` 的模块说明。

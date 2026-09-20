@@ -877,6 +877,15 @@ def build_parser() -> argparse.ArgumentParser:
     monitors.add_argument("--x", type=int, default=None, help="只查这个点在哪块屏上")
     monitors.add_argument("--y", type=int, default=None, help="与 --x 一起给")
 
+    # 文字识别: 编排里"这个按钮上写着什么"也得能问 —— 不同机器可能语言不同、
+    # 版本不同, 硬编码坐标之外的另一种稳法。只有 Windows 受控端有 (系统 OCR)。
+    ocr = _add_action(sub, "ocr", "认受控端屏幕上的字 (Windows 内置 OCR)")
+    ocr.add_argument("--region", default=None, help="只认这一块: left,top,width,height")
+    ocr.add_argument("--monitor", type=int, default=None, help="认第几块屏 (下标)")
+    ocr.add_argument("--all-screens", action="store_true", help="认整个虚拟桌面")
+    ocr.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
+    ocr.add_argument("--no-words", action="store_true", help="不要逐词的矩形 (省体积)")
+
     focus = _add_action(sub, "focus", "把受控端某个窗口切到前台")
     focus.add_argument("--hwnd", type=int, default=None, help="窗口句柄 (最可靠)")
     focus.add_argument("--title", default="", help="标题子串")
@@ -1023,6 +1032,20 @@ def _machine_op(args: argparse.Namespace) -> Tuple[str, dict]:
         if args.x is not None and args.y is not None:
             payload = {"x": args.x, "y": args.y}
         return "screen.monitors", payload
+    if command == "ocr":
+        payload: Dict[str, Any] = {}
+        if args.region:
+            payload["region"] = [int(v) for v in args.region.split(",")]
+        # monitor=0 是"第一块屏", 不能用 or 兜底
+        if args.monitor is not None:
+            payload["monitor"] = int(args.monitor)
+        if args.all_screens:
+            payload["all_screens"] = True
+        if args.lang:
+            payload["lang"] = args.lang
+        if args.no_words:
+            payload["include_words"] = False
+        return "screen.ocr", payload
     if command == "focus":
         payload: Dict[str, Any] = {"title": args.title, "process": args.process}
         if args.hwnd is not None:

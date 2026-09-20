@@ -47,7 +47,10 @@ REQUIRED = {
     # 的表现是 exe 能起、一调那个 op 才 ModuleNotFoundError, 和上面那组同一类风险,
     # 所以一起盯住。
     "远程惰性子模块": ["remote.monitor", "remote.calibrate", "remote.window",
-                       "remote.toast", "remote.input", "remote.vision", "remote.ice"],
+                       "remote.toast", "remote.input", "remote.vision", "remote.ice",
+                       # OCR 也是函数体内 import 的, 而且它只依赖标准库 + PIL,
+                       # 静态分析不会报缺 —— 漏了的表现同样是"起得来、一调才炸"
+                       "remote.ocr"],
     # WebRTC 栈: PeerJS 传输要连 broker 才用得上
     "WebRTC": ["aiortc", "av", "aioice", "pyee", "aiohttp"],
     "传输与平台": ["grpc", "google.protobuf", "websockets", "PIL", "PIL.ImageGrab",

@@ -76,6 +76,17 @@ def _rect_from(value: Optional[dict]):
     )
 
 
+def _ocr_rect(value: Optional[dict]):
+    """OCR 的行/词矩形: 键是 x/y/w/h (不是 Rect 的 left/top/width/height)。"""
+    value = value or {}
+    return pb.OcrRect(
+        x=int(value.get("x", 0)),
+        y=int(value.get("y", 0)),
+        w=int(value.get("w", 0)),
+        h=int(value.get("h", 0)),
+    )
+
+
 class RemoteControlServicer(pb_grpc.RemoteControlServicer):
     """所有方法都委托给 ``RemoteService``。"""
 
@@ -588,6 +599,84 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
         # 单点查询不给 primary_index (与 WS 侧一致: 那时它是 None)
         if result.get("primary_index") is not None:
             reply.primary_index = int(result["primary_index"])
+        return reply
+
+    # ---------------- 文字识别 ----------------
+    @staticmethod
+    def _ocr_args(request) -> dict:
+        """``OcrRequest`` -> service 的 args。
+
+        ``monitor`` 的 0 与 ``all_screens`` / ``include_words`` 的 False 都是有意义
+        的显式值 (第一块屏 / 不拼虚拟桌面 / 不要逐词矩形), 只能靠 ``HasField``
+        判断"给没给", 写成 ``or 默认`` 会把它们悄悄换掉。
+        """
+        args: dict = {}
+        if request.HasField("region"):
+            args["region"] = {
+                "left": request.region.left,
+                "top": request.region.top,
+                "width": request.region.width,
+                "height": request.region.height,
+            }
+        if request.HasField("monitor"):
+            args["monitor"] = int(request.monitor)
+        if request.HasField("all_screens"):
+            args["all_screens"] = bool(request.all_screens)
+        # lang 是普通 string: 不给就是空串, 而空串在 service 里正是"按用户语言
+        # 偏好挑" —— 两边意思一致, 直接传
+        if request.lang:
+            args["lang"] = request.lang
+        if request.HasField("include_words"):
+            args["include_words"] = bool(request.include_words)
+        return args
+
+    def Ocr(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle("screen.ocr", self._ocr_args(request))
+        return self._to_ocr(result)
+
+    @staticmethod
+    def _to_ocr(result: dict):
+        """把 OCR 报告填进 protobuf。
+
+        结构与 service 返回的 dict 一一对应 (含那套 x/y/w/h 的键名), 因为控制端会
+        把它转成 dict 与 WS 那条传输逐字段比对。
+        """
+        reply = pb.OcrReply(
+            ok=bool(result.get("ok")),
+            text=result.get("text", ""),
+            language=result.get("language", ""),
+            count=int(result.get("count", 0)),
+            width=int(result.get("width", 0)),
+            height=int(result.get("height", 0)),
+            scale=float(result.get("scale", 0.0)),
+        )
+        origin = result.get("origin") or {}
+        reply.origin.CopyFrom(
+            pb.Point(x=int(origin.get("x", 0)), y=int(origin.get("y", 0)))
+        )
+        for line in result.get("lines") or []:
+            item = pb.OcrLine(
+                text=line.get("text", ""),
+                x=int(line.get("x", 0)),
+                y=int(line.get("y", 0)),
+                w=int(line.get("w", 0)),
+                h=int(line.get("h", 0)),
+            )
+            item.screen.CopyFrom(_ocr_rect(line.get("screen")))
+            # 空就不放: WS 侧也是"没词就不给这个键", 两边一起省略才对得上
+            for word in line.get("words") or []:
+                entry = pb.OcrWord(
+                    text=word.get("text", ""),
+                    x=int(word.get("x", 0)),
+                    y=int(word.get("y", 0)),
+                    w=int(word.get("w", 0)),
+                    h=int(word.get("h", 0)),
+                )
+                entry.screen.CopyFrom(_ocr_rect(word.get("screen")))
+                item.words.append(entry)
+            reply.lines.append(item)
         return reply
 
     # ---------------- 被控端角标 ----------------

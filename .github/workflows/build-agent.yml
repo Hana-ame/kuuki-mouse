@@ -204,7 +204,19 @@ jobs:
           python -m remote.client ws --url ws://127.0.0.1:$WS_PORT \
             op kuuki --args '{"message":{"t":"__probe__"}}' | tee kuuki_probe.json
           grep -q '"handled": false' kuuki_probe.json
-          echo "端到端通过: WS / gRPC / kuuki 老协议透传 三条路都通"
+
+          # 文字识别 (screen.ocr) 也要在**打包后的 exe** 上够得着: 它走系统内置 OCR
+          # (PowerShell + WinRT), 是唯一一个"要起外部进程"的 op, 打漏模块的表现
+          # 就是这里 ModuleNotFoundError。
+          # 判据只到"这个 op 通了": runner 是无头服务会话, 屏上未必有字、也未必装了
+          # 中文语言包, 所以认出多少字不作为标准 —— 有 count 就算通, 明确回
+          # unsupported 也算通 (那说明平台门禁正常, 不是崩了)。
+          set +e
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT ocr --json > ocr.json 2>&1
+          set -e
+          cat ocr.json
+          grep -q '"count"\|unsupported' ocr.json
+          echo "端到端通过: WS / gRPC / kuuki 老协议透传 / OCR 四条路都通"
 
       - name: 深度冒烟 —— 真起一次 PeerJS 服务 (需要外网, 失败不阻塞)
         # 只开 PeerJS 一个传输, 看它能不能注册到公开 broker 拿到房间码。

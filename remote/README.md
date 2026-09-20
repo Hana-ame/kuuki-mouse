@@ -281,6 +281,43 @@ python -m remote.client ws op screen.screenshot --args '{"include_image": false}
   这两个字段都是 `optional` —— 普通标量分不清"没给"与"给 0"。
 - `region` 一律是**帧内坐标** (相对这一帧的左上角), 不是虚拟桌面坐标。
 
+### 3.1.5 `ocr`: 认出屏幕上写着什么
+
+`locate` 能说"这块像按钮", 说不出上面写着什么 —— 于是调用方知道该点哪儿, 却不知道
+自己点的是"发送"还是"清空"。`screen.ocr` 补上这一层, 而且**每行每词都给出能直接点的
+坐标** (三步换算 service 那层已经做掉: 除缩放 → 加裁剪偏移 → 加帧原点):
+
+```bash
+python -m remote.client ws ocr                          # 默认: 认主屏, 逐行简报
+python -m remote.client ws ocr --json                   # 要完整结构 (词矩形/语言/scale)
+python -m remote.client ws ocr --region 0,0,800,600     # 只认左上角那一块
+python -m remote.client ws ocr --monitor 1 --lang zh-Hans-CN
+python -m remote.client ws ocr --no-words               # 不要逐词矩形 (省体积)
+python -m remote.ctl ocr -a                             # 多机: 每台各自认各自的屏
+```
+
+```json
+{"ok": true, "text": "发送\n清空", "language": "zh-Hans-CN", "count": 2,
+ "width": 1680, "height": 1050, "scale": 1.0, "origin": {"x": 0, "y": 0},
+ "lines": [{"text": "发送", "x": 120, "y": 300, "w": 60, "h": 28,
+            "screen": {"x": 120, "y": 300, "w": 60, "h": 28},
+            "words": [{"text": "发送", "x": 120, "y": 300, "w": 60, "h": 28,
+                       "screen": {"x": 120, "y": 300, "w": 60, "h": 28}}]}]}
+```
+
+- 走**系统内置的 Windows OCR** (`Windows.Media.Ocr`, 经 PowerShell 调 WinRT),
+  所以 **零 pip 依赖、离线可用**, 但也因此**只有 Windows 受控端有** —— 别的平台
+  直接回 `unsupported`, 不给假结果。
+- 代价是每次调用要起一次外部进程, 约 1 秒; 大图 + 中文的识别本身也要几秒。
+  **别拿它当逐帧监控用**, 它是"需要读字的时候读一次"的那种工具。
+- `lang` 空着表示按受控端用户的语言偏好挑 (中文界面上就是中文引擎); 给了就**只用**
+  那个语言, 没装对应语言包直接报 `bad_request`, 不悄悄换引擎 (换了的表现是中文被
+  当别的语言认, 调用方完全看不出来)。
+- `--no-words` 之后 `words` 是**空列表**而不是"没有这个键" —— protobuf 的空
+  repeated 在转 dict 时照样会出现, 两条传输必须一致。
+- 中文常被切成一个字一个"词" (`"中 文 识 别"`): WinRT 的 OcrWord 就是这么切的,
+  要整句就直接用 `lines[].text`。
+
 ### 3.2 `python -m remote.ctl` (多机控制级)
 
 先把机器记进 registry (`~/.kuuki/registry.json`, `--registry` 可改), 之后按**别名 / 组 / 全体**
@@ -510,6 +547,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `screen.size` *`size`* | — | 屏幕尺寸 |
 | `screen.monitors` *`monitors`/`monitor`/`screens`* | `x` `y` (都给了才是单点查询) | 显示器与虚拟桌面边界 —— 多屏校准的前置信息, 见 3.1.3。仅 Windows 受控端 |
 | `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` `monitor` `all_screens` | 抓一帧。`monitor`=第几块屏 / `all_screens`=整个虚拟桌面 (都不给 = 主屏), 返回值带 `origin` (这一帧左上角在虚拟桌面坐标系里的位置), 见 3.1.4 |
+| `screen.ocr` *`ocr`/`read`* | `region` `monitor` `all_screens` `lang` `include_words` | 认出这一屏上的**文字** (系统内置 OCR), 每行/每词都带能直接点的屏幕坐标, 见 3.1.5。**仅 Windows 受控端**, 每次约 1 秒 |
 | `screen.grab` | 同上 | 同上, 强制二进制帧 —— **仅 WS** (`remote/ws_server.py` 直接处理) |
 | `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 —— **仅 WS**; gRPC 走 `StreamScreenshots` 服务端流式 |
 | `mouse.position` *`position`* | — | 当前光标 |
@@ -658,12 +696,13 @@ python -m remote --selftest --selftest-input
 - **动作增强**: 多步滚动的总量守恒 (3 格 / 5 步 → 每步 1 格, 不丢余数)、
   路径点拖动整条只按一次松一次、组合键 `hold_ms`、`keyboard.hold` 长按 —— 全部用
   假鼠标/假键盘断言, 不碰真实光标与按键。
-- **三传输等价**: 19 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
+- **三传输等价**: 22 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
   边界上也一致 —— `interval=0` / `duration=0` 这类"显式给 0"与"没给"能区分开
   (proto3 普通标量做不到, 相关字段已改成 `optional`)。窗口 op 另有 7 个用例
-  (打桩后端跨传输比对, 不动真桌面), `screen.calibrate` 与 `screen.monitors` 也
-  在这 19 项里 —— 它们的 proto reply 形状刻意做得与 service 返回的 dict 一致,
-  就是为了能逐字段比对。
+  (打桩后端跨传输比对, 不动真桌面), `screen.calibrate` / `screen.monitors` /
+  `screen.ocr` 也在这 22 项里 —— 它们的 proto reply 形状刻意做得与 service 返回的
+  dict 一致, 就是为了能逐字段比对 (OCR 那三条的引擎是打桩的: 真起一次外部进程要
+  1 秒, 而这里要比的是两条传输的翻译层)。
 - **窗口 op + 端到端**: `window.list` 列出真实桌面窗口 (标题/进程/pid/Z 序),
   `window.focus` 在 Code 与 msedge 之间来回切换且 `focused` / `window.foreground`
   逐一吻合。用"focus 认窗口 → 点进提问框 → paste → 帧差否证 → 回车"的**纯 repo**

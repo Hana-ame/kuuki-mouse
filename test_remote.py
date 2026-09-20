@@ -721,10 +721,16 @@ NEW_OP_CASES = [
     # virtual / primary_index —— 这两种形态都要与 WS 侧逐字段对上
     ("screen.monitors", {}),
     ("screen.monitors", {"x": 100, "y": 100}),
+    # ocr: repeated 里再套一层 repeated (行 -> 词), 每层还各带一个 x/y/w/h 的
+    # 矩形消息; 而且 include_words=False 时"词"这个键要两边一起消失 —— 一边给
+    # 空列表、一边不给, 跨传输比对就会红
+    ("screen.ocr", {}),
+    ("screen.ocr", {"include_words": False}),
+    ("screen.ocr", {"lang": "zh-Hans-CN"}),
 ]
 
 
-def test_new_ops_agree_across_transports():
+def test_new_ops_agree_across_transports(monkeypatch):
     """同一动作经 WS 与 gRPC 下发, 返回值与副作用必须一致。
 
     这条是 P1 的底线: 三个传输共用一个 ``RemoteService``, 但两边的**参数翻译层**
@@ -733,6 +739,10 @@ def test_new_ops_agree_across_transports():
     """
     from remote.grpc_server import GrpcServer
     from remote.client import GrpcClient, WsClient
+
+    # OCR 那几条用例走打桩: 真去起 PowerShell 一是慢 (每次约 1 秒)、二是 CI 的
+    # runner 上未必装了中文语言包。这里要比对的是**两条传输的翻译层**, 不是引擎。
+    stub_ocr(monkeypatch)
 
     async def over_ws():
         controller, mouse, keyboard = fake_controller()
@@ -2792,3 +2802,231 @@ def test_screenshot_monitor_agrees_across_transports(monkeypatch):
     # 抓的是第 0 块 (左边那块副屏, 1920x1080, 原点在虚拟桌面的 (0,0))
     assert (ws_picked["source_width"], ws_picked["source_height"]) == (1920, 1080)
     assert ws_picked["origin"] == {"x": 0, "y": 0}
+
+
+# ================================================================ 文字识别 (OCR)
+#
+# 视觉定位 (vision / locate) 只能说"屏幕上有一块像输入框的东西", 说不出里面写着
+# 什么。screen.ocr 补的就是这一层, 而且每行每词都给出**能直接点的坐标**。
+#
+# 测试分两路: 解析与坐标换算用打桩 (不该在单元测试里真起那个外部进程); 引擎本身
+# 只在"这台机器真有 OCR 语言包"时跑一次, 认不出数字才算失败。
+
+# 一段真的脚本会写出来的输出 (格式见 remote/ocr.py 里的 _PS_SCRIPT)
+_OCR_OUTPUT = "\n".join([
+    "OK=1",
+    "LANG=zh-Hans-CN",
+    "WIDTH=640",
+    "HEIGHT=240",
+    "LINE=HelIo OCR 123",
+    "WORD=HelIo\t46\t33\t100\t50",
+    "WORD=OCR\t150\t33\t80\t50",
+    "WORD=123\t240\t33\t134\t50",
+    "LINE=zhong wen",
+    "WORD=zhong\t42\t121\t47\t56",
+    "WORD=wen\t90\t121\t47\t56",
+    "AVAILABLE=ja,zh-Hans-CN",
+])
+
+
+def _ocr_available() -> bool:
+    """这台机器能不能真跑一次 OCR (Windows + 装了至少一个语言包)。"""
+    try:
+        from remote import ocr
+
+        return ocr.ocr_supported() and bool(ocr.list_languages())
+    except Exception:
+        return False
+
+
+def stub_ocr(monkeypatch):
+    """把 OCR 引擎换成固定结果。"""
+    from remote import ocr
+
+    payload = {
+        "ok": True,
+        "text": "AB",
+        "language": "zh-Hans-CN",
+        "width": 40,
+        "height": 20,
+        "lines": [
+            {
+                "text": "AB",
+                "x": 10,
+                "y": 8,
+                "w": 20,
+                "h": 4,
+                "words": [
+                    {"text": "A", "x": 10, "y": 8, "w": 10, "h": 4},
+                    {"text": "B", "x": 20, "y": 8, "w": 10, "h": 4},
+                ],
+            }
+        ],
+        "count": 1,
+    }
+    monkeypatch.setattr(ocr, "ocr_supported", lambda: True)
+    monkeypatch.setattr(
+        ocr, "recognize", lambda source=None, lang="", timeout=0: dict(payload)
+    )
+    return payload
+
+
+def test_ocr_parse_reads_lines_words_and_language():
+    """脚本输出 -> 结构化结果: 行文本、逐词矩形、行矩形、语言、可用语言。"""
+    from remote import ocr
+
+    result = ocr._parse(_OCR_OUTPUT)
+    assert result["language"] == "zh-Hans-CN"
+    assert (result["width"], result["height"]) == (640, 240)
+    assert [line["text"] for line in result["lines"]] == ["HelIo OCR 123", "zhong wen"]
+    assert result["text"] == "HelIo OCR 123\nzhong wen"
+    assert result["available"] == ["ja", "zh-Hans-CN"]
+
+    first = result["lines"][0]
+    # 行矩形 = 这一行所有词的外接盒: WinRT 的 OcrLine 自己没有 BoundingRect,
+    # 只有词有 —— 所以这条同时钉住"并集是按词的右/下边界算的"
+    assert (first["x"], first["y"], first["w"], first["h"]) == (46, 33, 328, 50)
+    assert [(w["text"], w["x"], w["w"]) for w in first["words"]] == [
+        ("HelIo", 46, 100),
+        ("OCR", 150, 80),
+        ("123", 240, 134),
+    ]
+
+
+@pytest.mark.parametrize(
+    "error,code",
+    [
+        ("no_language_pack", "unsupported"),   # 系统没装语言包 —— 不是调用方的错
+        ("no_such_language", "bad_request"),   # 指定了一个没有的语言
+        ("no_engine", "unsupported"),
+        ("failed", "internal"),
+    ],
+)
+def test_ocr_parse_raises_typed_errors(error, code):
+    """四种失败要能分开: "没装语言包"与"你指定的语言没有"处理办法完全不同。"""
+    from remote import ocr
+
+    with pytest.raises(ocr.OcrError) as exc:
+        ocr._parse("OK=0\nERROR=" + error + "\nMESSAGE=boom\nAVAILABLE=ja\n")
+    assert exc.value.code == code
+
+
+def test_ocr_line_rect_is_union_of_words():
+    from remote import ocr
+
+    words = [
+        {"x": 10, "y": 20, "w": 30, "h": 12},
+        {"x": 50, "y": 18, "w": 10, "h": 20},
+    ]
+    # 并集: x 取最小的左边界、y 取最小的上边界, 右下取各自的右/下边界 ——
+    # 第二个词更高 (18+20=38) 也更高一点地起始 (y=18), 所以整行 y 从 18 到 38
+    assert ocr.line_rect(words) == {"x": 10, "y": 18, "w": 50, "h": 20}
+    # 没有词的行: 给全零, 让调用方按"这一段没有位置"处理, 而不是崩在这里
+    assert ocr.line_rect([]) == {"x": 0, "y": 0, "w": 0, "h": 0}
+
+
+def test_ocr_to_screen_rect_applies_scale_offset_and_origin():
+    """图坐标 -> 屏幕坐标的三步: 除缩放、加裁剪偏移、加帧原点。
+
+    少任何一步都是"看着很合理但点偏": 只做前两步的话, 副屏摆在主屏左边时整块
+    坐标差 1920px。
+    """
+    from remote import ocr
+
+    rect = {"x": 10, "y": 8, "w": 20, "h": 4}
+    assert ocr.to_screen_rect(rect, scale=0.5, origin=(-1920, 0), offset=(100, 50)) == {
+        "x": -1920 + 100 + 20,
+        "y": 0 + 50 + 16,
+        "w": 40,
+        "h": 8,
+    }
+    # scale 给 0/None (调用方拿不到系数时常见) 按 1 处理 —— 除零比少换算一步更难查
+    assert ocr.to_screen_rect(rect, scale=0) == {"x": 10, "y": 8, "w": 20, "h": 4}
+    assert ocr.to_screen_rect(rect) == {"x": 10, "y": 8, "w": 20, "h": 4}
+
+
+def test_screen_ocr_returns_clickable_coordinates(monkeypatch):
+    """service 那一层把三步换算全做掉 —— 调用方不该自己再乘系数。"""
+    stub_ocr(monkeypatch)
+    screen = fake_screen(200, 100)
+    # 假装主屏在虚拟桌面的 (-1920, 0): 单屏机器测不到这一层平移
+    screen.frame_origin = lambda: (-1920, 0)  # type: ignore[method-assign]
+    service = RemoteService(screen=screen, controller=fake_controller()[0])
+
+    # 裁 (100,50) 起的 80x40, 再按 max_width=40 缩一半 -> scale 0.5
+    result = service.handle("screen.ocr", {"region": [100, 50, 80, 40], "max_width": 40})
+    line = result["lines"][0]
+    # 图上的 x=10 -> 屏幕: 10/0.5 + 100 + (-1920)
+    assert line["screen"] == {"x": -1800, "y": 66, "w": 40, "h": 8}
+    assert line["words"][0]["screen"] == {"x": -1800, "y": 66, "w": 20, "h": 8}
+    assert result["scale"] == 0.5
+    assert result["origin"] == {"x": -1920, "y": 0}
+
+
+def test_screen_ocr_can_drop_words(monkeypatch):
+    """include_words=False 时词列表是**空**, 不是"换个别的形状"。
+
+    为什么不是"不给这个键": protobuf 的空 repeated 在 MessageToDict 里照样会
+    出现 (``"words": []``), 而 WS 侧是普通 dict —— 一边给空列表、一边不给键,
+    跨传输比对就红了 (就是 test_new_ops_agree_across_transports 抓的那种)。
+    """
+    stub_ocr(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    assert len(service.handle("screen.ocr", {})["lines"][0]["words"]) == 2
+    assert service.handle("screen.ocr", {"include_words": False})["lines"][0]["words"] == []
+
+
+def test_screen_ocr_forwards_language(monkeypatch):
+    """--lang 要原样到引擎: 悄悄换引擎的表现是中文被当别的语言认, 看不出来。"""
+    from remote import ocr
+
+    stub_ocr(monkeypatch)
+    seen = {}
+
+    def fake_recognize(source=None, lang="", timeout=0):
+        seen["lang"] = lang
+        return {"ok": True, "text": "", "language": lang, "width": 1, "height": 1,
+                "lines": [], "count": 0}
+
+    monkeypatch.setattr(ocr, "recognize", fake_recognize)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    service.handle("screen.ocr", {"lang": "zh-Hans-CN"})
+    assert seen["lang"] == "zh-Hans-CN"
+
+
+def test_screen_ocr_reports_unsupported_when_not_windows(monkeypatch):
+    """跑不了的那台机器要说"不支持", 而不是假装认出了字。"""
+    from remote import ocr
+
+    monkeypatch.setattr(ocr, "ocr_supported", lambda: False)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.ocr", {})
+    assert exc.value.code == "unsupported"
+
+
+@pytest.mark.skipif(not _ocr_available(), reason="这台机器没有可用的 OCR 语言包")
+def test_ocr_recognizes_generated_image():
+    """真跑一次系统 OCR: 画一张有数字的字, 认得出来才算通。
+
+    只断言数字 —— 中文/英文的识别率随语言包版本浮动, 而数字是最稳的那部分;
+    这里要证明的是"整条链路通" (外部进程 -> WinRT -> 解析), 不是识别率。
+    """
+    from PIL import ImageDraw, ImageFont
+
+    from remote import ocr
+
+    image = Image.new("RGB", (640, 240), "white")
+    draw = ImageDraw.Draw(image)
+    try:
+        font = ImageFont.truetype(r"C:\Windows\Fonts\msyh.ttc", 72)
+    except Exception:  # pragma: no cover - 没有这个字体就用默认的小字
+        font = ImageFont.load_default()
+    draw.text((60, 80), "Kuuki 12345", fill="black", font=font)
+
+    result = ocr.recognize(image)
+    assert result["lines"], "一张有字的图被认成了空: %r" % (result,)
+    digits = result["text"].replace(" ", "").replace("\n", "")
+    assert "12345" in digits, "数字没认出来: %r" % (result["text"],)
+    # 逐词矩形是这一层的原始信息: 有词就得有位置
+    assert all(word["w"] > 0 for line in result["lines"] for word in line["words"])

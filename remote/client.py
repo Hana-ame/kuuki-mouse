@@ -252,6 +252,22 @@ class GrpcClient:
             request.all_screens = bool(args["all_screens"])
         return request
 
+    def _ocr_request(self, args: dict):
+        pb = self._pb
+        request = pb.OcrRequest(lang=args.get("lang", "") or "")
+        rect = self._rect(args.get("region"))
+        if rect is not None:
+            request.region.CopyFrom(rect)
+        # 与 _shot_request 同一套规矩: monitor=0 是"第一块屏", 不是"没给";
+        # all_screens / include_words 的 False 也是显式给的, 只能判 None
+        if args.get("monitor") is not None:
+            request.monitor = int(args["monitor"])
+        if args.get("all_screens") is not None:
+            request.all_screens = bool(args["all_screens"])
+        if args.get("include_words") is not None:
+            request.include_words = bool(args["include_words"])
+        return request
+
     def _scroll_request(self, args: dict):
         pb = self._pb
         request = pb.ScrollRequest(
@@ -362,6 +378,7 @@ class GrpcClient:
             "screen.monitors": lambda: self.stub.Monitors(
                 pb.MonitorsRequest(**_optional_int(args, "x", "y")), **self._kwargs()
             ),
+            "screen.ocr": lambda: self.stub.Ocr(self._ocr_request(args), **self._kwargs()),
             "mouse.position": lambda: self.stub.GetMousePosition(empty, **self._kwargs()),
             "mouse.move": lambda: self.stub.MoveMouse(
                 pb.MoveMouseRequest(
@@ -612,6 +629,16 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     stream.add_argument("--count", type=int, default=5)
     _add_shot_args(stream)
 
+    # 文字识别: locate 只能说"这里有块像按钮的东西", 说不出上面写着什么 ——
+    # 这一层补上, 而且每行都给出能直接点的坐标 (Windows 受控端才有, 走系统 OCR)
+    ocr = sub.add_parser("ocr", help="认受控端屏幕上的字 (Windows 内置 OCR)")
+    ocr.add_argument("--region", default=None, help="只认这一块: left,top,width,height")
+    ocr.add_argument("--monitor", type=int, default=None, help="认第几块屏 (下标, 见 monitors)")
+    ocr.add_argument("--all-screens", action="store_true", help="认整个虚拟桌面")
+    ocr.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
+    ocr.add_argument("--no-words", action="store_true", help="不要逐词的矩形 (省体积)")
+    ocr.add_argument("--json", action="store_true", help="输出完整 JSON (默认是逐行简报)")
+
     loc = sub.add_parser("locate", help="在屏幕里定位目标 (颜色/模板/帧差/概览)")
     loc.add_argument("--describe", action="store_true", help="输出网格概览 (默认就是这个)")
     loc.add_argument("--dominant", action="store_true", help="列出主色调")
@@ -669,6 +696,50 @@ def _monitors_args(args: argparse.Namespace) -> dict:
     if getattr(args, "x", None) is not None and getattr(args, "y", None) is not None:
         return {"x": args.x, "y": args.y}
     return {}
+
+
+def _ocr_args(args: argparse.Namespace) -> dict:
+    """``ocr`` 子命令 -> ``screen.ocr`` 的 args。
+
+    ``include_words`` 反过来走 ``--no-words``: 默认要逐词矩形 (词才是能点的粒度),
+    写成"需要显式关掉的开关"比"容易忘加的 flag"安全 —— 与 calibrate 的
+    ``--no-restore`` 一个道理。
+    """
+    out: Dict[str, Any] = {}
+    if getattr(args, "region", None):
+        out["region"] = [int(v) for v in args.region.split(",")]
+    if getattr(args, "monitor", None) is not None:
+        out["monitor"] = int(args.monitor)
+    if getattr(args, "all_screens", False):
+        out["all_screens"] = True
+    if getattr(args, "lang", ""):
+        out["lang"] = args.lang
+    if getattr(args, "no_words", False):
+        out["include_words"] = False
+    return out
+
+
+def _print_ocr(result: dict, as_json: bool = False) -> None:
+    """OCR 结果的两种看法。
+
+    默认给**简报**: 一行一条"屏幕坐标 + 文字", 因为调用方多半是来找某个词在哪的,
+    给它一堆嵌套 JSON 反而要自己再翻一遍。要看全的 (词矩形 / 语言 / 缩放系数)
+    加 ``--json``。
+    """
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    lines = result.get("lines") or []
+    print(
+        f"语言 {result.get('language') or '-'} · {len(lines)} 行 · "
+        f"帧 {result.get('width')}x{result.get('height')} · scale {result.get('scale')}"
+    )
+    if not lines:
+        print("  (这一帧没认出文字)")
+        return
+    for line in lines:
+        screen = line.get("screen") or {}
+        print(f"  ({screen.get('x')},{screen.get('y')}) {line.get('text')}")
 
 
 def _calibrate_args(args: argparse.Namespace) -> dict:
@@ -928,6 +999,10 @@ async def _run_ws(args: argparse.Namespace) -> int:
             result = await client.call("screen.monitors", _monitors_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
+        if args.action == "ocr":
+            result = await client.call("screen.ocr", _ocr_args(args))
+            _print_ocr(result, getattr(args, "json", False))
+            return 0
         if args.action == "calibrate":
             result = await client.call("screen.calibrate", _calibrate_args(args))
             _print_calibration(result, args.save)
@@ -996,6 +1071,10 @@ def _run_grpc(args: argparse.Namespace) -> int:
         if args.action == "monitors":
             result = client.call("screen.monitors", _monitors_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "ocr":
+            result = client.call("screen.ocr", _ocr_args(args))
+            _print_ocr(result, getattr(args, "json", False))
             return 0
         if args.action == "calibrate":
             result = client.call("screen.calibrate", _calibrate_args(args))
@@ -1094,6 +1173,10 @@ async def _run_peerjs(args: argparse.Namespace) -> int:
         if args.action == "monitors":
             result = await client.call("screen.monitors", _monitors_args(args))
             print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
+        if args.action == "ocr":
+            result = await client.call("screen.ocr", _ocr_args(args))
+            _print_ocr(result, getattr(args, "json", False))
             return 0
         if args.action == "calibrate":
             result = await client.call("screen.calibrate", _calibrate_args(args))

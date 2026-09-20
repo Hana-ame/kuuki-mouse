@@ -26,8 +26,14 @@
 
 ## 未做的能力
 
-- **OCR / 文字识别** —— 视觉能定位"这里有个框"，认不出框里写的是什么
-  （window 类 op 已补：`gui-window-ops-module.md`）
+**目前没有**（2026-09-21 把 OCR 补上之后，这一节空了）。
+
+> 2026-09-21 已补：**OCR / 文字识别** —— `screen.ocr`（别名 `ocr` / `read`），
+> 走**系统内置的 Windows OCR**（`Windows.Media.Ocr`，经 PowerShell 调 WinRT），
+> 所以零 pip 依赖、离线可用；代价是只有 Windows 受控端有、每次约 1 秒。每行每词
+> 都给出**能直接点的屏幕坐标**（三步换算在 service 那层做掉：除缩放 → 加裁剪偏移
+> → 加帧原点）。实现见 `remote/ocr.py`，用法见 `remote/README.md` 3.1.5，选型取舍
+> 与踩过的坑见 `gui-ocr-via-powershell-winrt.md`。
 
 ## 未做的验证
 

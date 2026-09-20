@@ -350,6 +350,36 @@ python -m remote.ctl find-text --query 下一步 -a              # 多机各找�
 - `match` / `unit` / `case_sensitive` 都在返回值里**回显**: 参数不回显的话,"某条传输
   把它悄悄丢了"永远测不出来 (服务端按默认处理, 一切看起来正常)。
 
+### 3.1.7 `click-text`: 找到写着它的那块, 直接点
+
+`find-text` 给你坐标, `click-text` 连点也做了 —— **合成一次调用**, 因为分成两次的
+话, 找与点之间隔着一整个来回, 屏幕可能已经变了 (会滚动的列表、会刷新的页面),
+点在"刚才那一帧的坐标"上, 点中的可能已经不是那一行:
+
+```bash
+python -m remote.client ws click-text 发送                       # 点最靠上的那一处
+python -m remote.client ws click-text 发送 --dry-run             # 先看清楚会点在哪
+python -m remote.client ws click-text 下一步 --index 1           # 命中多处时点第二个
+python -m remote.client ws click-text 发送 --button right --count 2
+python -m remote.ctl click-text --query 下一步 -a                # 多机各点各的
+```
+
+```json
+{"ok": true, "found": true, "clicked": true, "dry_run": false,
+ "query": "发送", "index": 0, "matches": 1, "button": "left", "clicks": 1,
+ "interval": 0.05, "hold": 0.06, "positioned_at": {"x": 150, "y": 314},
+ "item": {"text": "发送", "screen": {"x": 120, "y": 300, "w": 60, "h": 28},
+          "center": {"x": 150, "y": 314}}}
+```
+
+- **没找到要报错** (`not_found`): 调用方要求的是"点它", 做不到必须说清楚 —— 静默
+  回个"没找到"会被当成"点了"。查询 (`find-text`) 可以空手而归, 动作不行。
+- `index` 越界报 `bad_request`, 不会退化成"点第一个 / 点最后一个"。
+- `--dry-run` 只报坐标不动鼠标, 但**点击参数照常回显** —— 不然你以为看清了将要
+  发生什么, 看到的却是另一套默认值。
+- 点的目标不在前台窗口里时先 `remote.ctl focus`(切前台是异步的, 见
+  `docs/knowledge/gui-window-focus-gap.md`) —— 这一层不帮你切。
+
 ### 3.2 `python -m remote.ctl` (多机控制级)
 
 先把机器记进 registry (`~/.kuuki/registry.json`, `--registry` 可改), 之后按**别名 / 组 / 全体**
@@ -581,6 +611,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` `monitor` `all_screens` | 抓一帧。`monitor`=第几块屏 / `all_screens`=整个虚拟桌面 (都不给 = 主屏), 返回值带 `origin` (这一帧左上角在虚拟桌面坐标系里的位置), 见 3.1.4 |
 | `screen.ocr` *`ocr`/`read`* | `region` `monitor` `all_screens` `lang` `include_words` | 认出这一屏上的**文字** (系统内置 OCR), 每行/每词都带能直接点的屏幕坐标, 见 3.1.5。**仅 Windows 受控端**, 每次约 1 秒 |
 | `screen.find_text` *`find_text`/`find`/`findtext`* | `query` `match` `unit` `case_sensitive` `all` `limit` `region` `monitor` `all_screens` `lang` | 找**写着某段文字的那块**, 回能直接点的中心点坐标 (`center`), 见 3.1.6。仅 Windows 受控端 |
+| `screen.click_text` *`click_text`/`clicktext`* | `query` `match` `unit` `case_sensitive` `index` `dry_run` `button` `count` `interval` `hold` `move_duration` `region` `monitor` `all_screens` `lang` | 找到写着它的那块**并点它** (一次调用, 找与点落在同一帧), 见 3.1.7。没找到报 `not_found`。仅 Windows 受控端 |
 | `screen.grab` | 同上 | 同上, 强制二进制帧 —— **仅 WS** (`remote/ws_server.py` 直接处理) |
 | `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 —— **仅 WS**; gRPC 走 `StreamScreenshots` 服务端流式 |
 | `mouse.position` *`position`* | — | 当前光标 |
@@ -729,15 +760,17 @@ python -m remote --selftest --selftest-input
 - **动作增强**: 多步滚动的总量守恒 (3 格 / 5 步 → 每步 1 格, 不丢余数)、
   路径点拖动整条只按一次松一次、组合键 `hold_ms`、`keyboard.hold` 长按 —— 全部用
   假鼠标/假键盘断言, 不碰真实光标与按键。
-- **三传输等价**: 26 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
+- **三传输等价**: 30 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
   边界上也一致 —— `interval=0` / `duration=0` 这类"显式给 0"与"没给"能区分开
   (proto3 普通标量做不到, 相关字段已改成 `optional`)。窗口 op 另有 7 个用例
   (打桩后端跨传输比对, 不动真桌面), `screen.calibrate` / `screen.monitors` /
-  `screen.ocr` / `screen.find_text` 也在这 26 项里 —— 它们的 proto reply 形状刻意
-  做得与 service 返回的 dict 一致, 就是为了能逐字段比对 (OCR 那七条的引擎是打桩
-  的: 真起一次外部进程要 1 秒, 而这里要比的是两条传输的翻译层)。
-  `find_text` 那四条里有一条是**没命中**的 —— 空 repeated 在 protobuf 转 dict 时
-  照样会出现, 一边给 `[]` 一边不给键就会红。
+  `screen.ocr` / `screen.find_text` / `screen.click_text` 也在这 30 项里 —— 它们的
+  proto reply 形状刻意做得与 service 返回的 dict 一致, 就是为了能逐字段比对
+  (OCR 那十一条的引擎是打桩的: 真起一次外部进程要 1 秒, 而这里要比的是两条传输的
+  翻译层)。`find_text` 那四条里有一条是**没命中**的 —— 空 repeated 在 protobuf
+  转 dict 时照样会出现, 一边给 `[]` 一边不给键就会红。副作用比对也带上了"按下 /
+  抬起各几次": 只比返回值的话, "两条传输都回了一句点到了, 但其中一条没真按下去"
+  是看不出来的 (`--dry-run` 传丢了就是这样)。
 - **窗口 op + 端到端**: `window.list` 列出真实桌面窗口 (标题/进程/pid/Z 序),
   `window.focus` 在 Code 与 msedge 之间来回切换且 `focused` / `window.foreground`
   逐一吻合。用"focus 认窗口 → 点进提问框 → paste → 帧差否证 → 回车"的**纯 repo**

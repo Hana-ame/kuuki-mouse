@@ -904,6 +904,27 @@ def build_parser() -> argparse.ArgumentParser:
     find.add_argument("--all-screens", action="store_true", help="找整个虚拟桌面")
     find.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
 
+    # 找到就点: 与 find-text 同一套"找什么", 多一组"怎么点"。合成一次调用 —— 找与
+    # 点之间隔着一整个来回的话, 屏幕可能已经变了
+    click = _add_action(sub, "click-text", "找屏幕上写着某段文字的那块并点它 (OCR)")
+    click.add_argument("--query", required=True, help="要找的文字 (--match regex 时是正则)")
+    click.add_argument("--match", default="contains", choices=("contains", "exact", "regex"),
+                       help="怎么算命中 (默认 contains)")
+    click.add_argument("--unit", default="line", choices=("line", "word"),
+                       help="按行匹配还是按词 (默认 line)")
+    click.add_argument("--case-sensitive", action="store_true", help="区分大小写")
+    click.add_argument("--index", type=int, default=None, help="命中多个时点第几个 (默认 0)")
+    click.add_argument("--button", default=None, help="left / right / middle")
+    click.add_argument("--count", type=int, default=None, help="点几下 (双击给 2)")
+    click.add_argument("--interval", type=float, default=None, help="多下之间的间隔 (秒)")
+    click.add_argument("--hold", type=float, default=None, help="按下与抬起之间隔多久 (秒)")
+    click.add_argument("--move-duration", type=float, default=None, help="先平滑移过去 (秒)")
+    click.add_argument("--dry-run", action="store_true", help="只报会点在哪, 不真的点")
+    click.add_argument("--region", default=None, help="只在这一块里找: left,top,width,height")
+    click.add_argument("--monitor", type=int, default=None, help="找第几块屏 (下标)")
+    click.add_argument("--all-screens", action="store_true", help="找整个虚拟桌面")
+    click.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
+
     focus = _add_action(sub, "focus", "把受控端某个窗口切到前台")
     focus.add_argument("--hwnd", type=int, default=None, help="窗口句柄 (最可靠)")
     focus.add_argument("--title", default="", help="标题子串")
@@ -1085,6 +1106,37 @@ def _machine_op(args: argparse.Namespace) -> Tuple[str, dict]:
         if args.lang:
             payload["lang"] = args.lang
         return "screen.find_text", payload
+    if command == "click-text":
+        payload: Dict[str, Any] = {
+            "query": args.query,
+            "match": args.match,
+            "unit": args.unit,
+        }
+        if args.case_sensitive:
+            payload["case_sensitive"] = True
+        if args.index is not None:
+            payload["index"] = int(args.index)
+        if args.button:
+            payload["button"] = args.button
+        if args.count is not None:
+            payload["count"] = int(args.count)
+        if args.interval is not None:
+            payload["interval"] = float(args.interval)
+        if args.hold is not None:
+            payload["hold"] = float(args.hold)
+        if args.move_duration is not None:
+            payload["move_duration"] = float(args.move_duration)
+        if args.dry_run:
+            payload["dry_run"] = True
+        if args.region:
+            payload["region"] = [int(v) for v in args.region.split(",")]
+        if args.monitor is not None:
+            payload["monitor"] = int(args.monitor)
+        if args.all_screens:
+            payload["all_screens"] = True
+        if args.lang:
+            payload["lang"] = args.lang
+        return "screen.click_text", payload
     if command == "focus":
         payload: Dict[str, Any] = {"title": args.title, "process": args.process}
         if args.hwnd is not None:

@@ -501,6 +501,43 @@ message FindTextReply {
   Point origin = 11;
 }
 
+// ------------------------------------------------------- 找到写着什么的那块并点它
+//
+// ``screen.click_text`` = find_text + click, **一次调用**: 分成两次的话, 找与点之间
+// 隔着一整个来回, 屏幕可能已经变了 (会滚动的列表 / 会刷新的页面)。
+
+message ClickTextRequest {
+  FindTextRequest find = 1;    // 找什么 —— 与 screen.find_text 同一套参数
+  optional string button = 2;
+  // 点击次数。proto 里叫 count 是因为 service 里 ``count`` 是 ``clicks`` 的别名
+  optional int32 count = 3;
+  optional double interval = 4;
+  optional double hold = 5;
+  optional int32 index = 6;    // 命中多个时点第几个 (默认 0 = 最靠上的)
+  optional bool dry_run = 7;   // 只报坐标不点
+  optional double move_duration = 8;
+}
+
+message ClickTextReply {
+  bool ok = 1;
+  bool found = 2;              // 没找到是**错误** (not_found), 所以这里恒为 true
+  bool clicked = 3;            // false = dry_run
+  bool dry_run = 4;
+  string query = 5;
+  string match = 6;
+  string unit = 7;
+  string language = 8;
+  int32 index = 9;
+  int32 matches = 10;          // 一共命中几处
+  FindTextItem item = 11;      // 被点的那一块
+  // 点击参数一律回显 (含 dry_run) —— 见 FindTextReply 那条注释
+  string button = 12;
+  int32 clicks = 13;
+  double interval = 14;
+  double hold = 15;
+  Point positioned_at = 16;    // 实际点的坐标 (被点那块的中心)
+}
+
 // ---------------------------------------------------------------- 服务
 
 service RemoteControl {
@@ -540,6 +577,7 @@ service RemoteControl {
   // 认屏幕上的字 (系统内置 OCR; 目前仅 Windows 受控端)
   rpc Ocr(OcrRequest) returns (OcrReply);
   rpc FindText(FindTextRequest) returns (FindTextReply);
+  rpc ClickText(ClickTextRequest) returns (ClickTextReply);
 
   // 窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
   rpc ListWindows(ListWindowsRequest) returns (ListWindowsReply);

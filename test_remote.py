@@ -452,7 +452,18 @@ def test_peerjs_chunker_roundtrip():
 
 
 def side_effects(mouse, keyboard):
-    return (list(mouse.scrolls), list(mouse.positions), list(keyboard.events))
+    """一次调用留下的痕迹 —— 跨传输比对时连"点了几次"也要对得上。
+
+    只比返回值是不够的: 两条传输都可能回一句"点到了", 但一条真的按了下去、
+    另一条没有 (dry_run 传丢了就是这样)。presses / releases 是这一层的真相。
+    """
+    return (
+        list(mouse.scrolls),
+        list(mouse.positions),
+        list(keyboard.events),
+        mouse.presses,
+        mouse.releases,
+    )
 
 
 def flatten(result):
@@ -732,6 +743,11 @@ NEW_OP_CASES = [
     ("screen.find_text", {"query": "A", "unit": "word", "all": True}),
     ("screen.find_text", {"query": "zzz"}),
     ("screen.find_text", {"query": "^A", "match": "regex", "case_sensitive": True, "limit": 1}),
+    # click_text: 真点一次 / dry_run (不该有任何痕迹) / 带显式 0 的点击参数
+    ("screen.click_text", {"query": "AB"}),
+    ("screen.click_text", {"query": "AB", "dry_run": True}),
+    ("screen.click_text", {"query": "AB", "interval": 0, "hold": 0, "count": 2}),
+    ("screen.click_text", {"query": "AB", "button": "right", "move_duration": 0}),
 ]
 
 
@@ -3195,3 +3211,166 @@ def test_screen_find_text_reports_unsupported_when_not_windows(monkeypatch):
     with pytest.raises(RemoteError) as exc:
         service.handle("screen.find_text", {"query": "x"})
     assert exc.value.code == "unsupported"
+
+
+# ================================================================ 找到那块并点它
+#
+# click_text = find_text + click 合成一次。这一层要盯的是: 点的是不是**中心点**
+# (不是图坐标)、dry_run 到底有没有点下去、命中多个时 index 有没有真的被用上、
+# 以及"没找到"是不是报错 (动作不能像查询那样空手而归)。
+
+
+def _stub_two_matches(monkeypatch):
+    """打桩成"上下两处都写着同一个词", 用来验 index。"""
+    from remote import ocr
+
+    monkeypatch.setattr(ocr, "ocr_supported", lambda: True)
+    monkeypatch.setattr(
+        ocr,
+        "recognize",
+        lambda source=None, lang="", timeout=0: {
+            "ok": True,
+            "text": "x",
+            "language": "zh-Hans-CN",
+            "width": 40,
+            "height": 20,
+            "lines": [
+                {"text": "下面", "x": 0, "y": 100, "w": 20, "h": 4, "words": []},
+                {"text": "上面", "x": 0, "y": 20, "w": 20, "h": 4, "words": []},
+            ],
+            "count": 2,
+        },
+    )
+
+
+def test_screen_click_text_clicks_the_center(monkeypatch):
+    """点的是**屏幕坐标**上的中心点 —— 不是图坐标, 也不是矩形左上角。"""
+    stub_ocr(monkeypatch)
+    controller, mouse, _ = fake_controller()
+    screen = fake_screen(200, 100)
+    screen.frame_origin = lambda: (-1920, 0)  # type: ignore[method-assign]
+    service = RemoteService(screen=screen, controller=controller)
+
+    result = service.handle(
+        "screen.click_text", {"query": "AB", "region": [100, 50, 80, 40], "max_width": 40}
+    )
+    assert result["found"] and result["clicked"]
+    # 图上 (10,8,20,4) -> 屏幕 (-1800,66,40,8), 中心 (-1780,70)
+    assert result["positioned_at"] == {"x": -1780, "y": 70}
+    assert mouse.positions == [(-1780, 70)]
+    assert (mouse.presses, mouse.releases) == (1, 1)
+
+
+def test_screen_click_text_dry_run_does_not_click(monkeypatch):
+    """--dry-run 只报坐标: 调用方要先看清会点在哪。"""
+    stub_ocr(monkeypatch)
+    controller, mouse, _ = fake_controller()
+    service = RemoteService(screen=fake_screen(), controller=controller)
+
+    result = service.handle("screen.click_text", {"query": "AB", "dry_run": True})
+    assert result["clicked"] is False and result["dry_run"] is True
+    assert result["positioned_at"] == {"x": 20, "y": 10}
+    # 一次都没动: 光标轨迹、按下抬起全是空的
+    assert mouse.positions == [] and mouse.presses == 0 and mouse.releases == 0
+
+
+def test_screen_click_text_index_picks_which_match(monkeypatch):
+    """命中多个时 index 决定点哪个 (排序与 find_text 一致: 先上后下)。"""
+    _stub_two_matches(monkeypatch)
+    controller, mouse, _ = fake_controller()
+    service = RemoteService(screen=fake_screen(), controller=controller)
+
+    first = service.handle("screen.click_text", {"query": "面"})
+    assert first["index"] == 0 and first["item"]["text"] == "上面"
+    assert first["matches"] == 2
+    mouse.positions.clear()
+    second = service.handle("screen.click_text", {"query": "面", "index": 1})
+    assert second["item"]["text"] == "下面"
+    assert mouse.positions == [(10, 102)]
+    # 越界要报错, 而不是"点最后一个"或者"点第一个"
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.click_text", {"query": "面", "index": 2})
+    assert exc.value.code == "bad_request"
+
+
+def test_screen_click_text_not_found_is_an_error(monkeypatch):
+    """没找到要报 not_found —— 调用方要求的是"点它", 静默回 found=false 会被
+    当成"点了"。查询可以空手而归, 动作不行。"""
+    stub_ocr(monkeypatch)
+    controller, mouse, _ = fake_controller()
+    service = RemoteService(screen=fake_screen(), controller=controller)
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.click_text", {"query": "zzz"})
+    assert exc.value.code == "not_found"
+    assert mouse.positions == [] and mouse.presses == 0
+
+
+def test_screen_click_text_echoes_click_parameters(monkeypatch):
+    """button / clicks / interval / hold 一律回显 (含 dry_run)。
+
+    dry_run 时更要看得到: 调用方以为自己看清了将要发生什么, 结果回显是假的。
+    """
+    stub_ocr(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    result = service.handle(
+        "screen.click_text",
+        {"query": "AB", "dry_run": True, "button": "right", "count": 2,
+         "interval": 0, "hold": 0},
+    )
+    assert result["button"] == "right"
+    assert result["clicks"] == 2
+    # 显式给的 0 不能被"or 默认"吞掉
+    assert result["interval"] == 0 and result["hold"] == 0
+
+
+def test_click_text_and_mouse_click_share_one_default(monkeypatch):
+    """两个 op 的点击默认值必须是**同一份**解析 —— 各写一份的话, "改了默认 hold
+    只改了一边"根本进不了比对 (两条传输一起错, 看上去是一致的)。"""
+    from remote.service import _click_plan
+
+    stub_ocr(monkeypatch)
+    controller, mouse, _ = fake_controller()
+    service = RemoteService(screen=fake_screen(), controller=controller)
+    plan = _click_plan({})
+    # 也钉住绝对值: 只比两个 op 是否相等的话, "两边一起被改成别的值"测不出来
+    assert plan == {"button": "left", "clicks": 1, "interval": 0.05, "hold": 0.06,
+                    "move_duration": 0.0}
+    click = service.handle("mouse.click", {})
+    text = service.handle("screen.click_text", {"query": "AB", "dry_run": True})
+    assert plan["hold"] == click["hold"] == text["hold"]
+    assert plan["interval"] == click["interval"] == text["interval"]
+    assert plan["button"] == click["button"] == text["button"]
+
+
+def test_screen_click_text_reports_unsupported_when_not_windows(monkeypatch):
+    from remote import ocr
+
+    monkeypatch.setattr(ocr, "ocr_supported", lambda: False)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.click_text", {"query": "x"})
+    assert exc.value.code == "unsupported"
+
+
+
+def test_click_text_args_keeps_explicit_zero():
+    """``--interval 0`` / ``--hold 0`` / ``--index 0`` 不能被 ``or 默认`` 吞掉。
+
+    客户端构造 args 时写成 ``if value:`` 而不是 ``if value is not None:`` 的话,
+    这三个 0 会全部消失 —— 服务端按默认值处理, 于是"连点两下中间不歇"变成"歇
+    50ms", 而回显里看不出来 (两边都回的是默认值)。
+    """
+    from argparse import Namespace
+
+    from remote.client import _click_text_args
+
+    args = Namespace(
+        query="x", match="contains", unit="line", region=None, monitor=None,
+        all_screens=False, lang="", case_sensitive=False, all=False, limit=None,
+        index=0, button=None, count=None, interval=0.0, hold=0.0,
+        move_duration=0.0, dry_run=False,
+    )
+    out = _click_text_args(args)
+    assert out["index"] == 0
+    assert out["interval"] == 0 and out["hold"] == 0
+    assert out["move_duration"] == 0

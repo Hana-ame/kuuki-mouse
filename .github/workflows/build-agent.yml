@@ -226,7 +226,16 @@ jobs:
           set -e
           cat find_text.json
           grep -q '"found"\|unsupported' find_text.json
-          echo "端到端通过: WS / gRPC / kuuki 老协议透传 / OCR / find_text 五条路都通"
+
+          # 找到就点 (screen.click_text): 用 --dry-run —— runner 是无头会话, 不能
+          # 真的往屏上点; dry_run 照样要走完"认字 → 筛 → 算中心点"整条链路。
+          set +e
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT \
+            click-text Send --dry-run --json > click_text.json 2>&1
+          set -e
+          cat click_text.json
+          grep -q '"clicked"\|not_found\|unsupported' click_text.json
+          echo "端到端通过: WS / gRPC / kuuki 老协议透传 / OCR / find_text / click_text 六条路都通"
 
       - name: 深度冒烟 —— 真起一次 PeerJS 服务 (需要外网, 失败不阻塞)
         # 只开 PeerJS 一个传输, 看它能不能注册到公开 broker 拿到房间码。

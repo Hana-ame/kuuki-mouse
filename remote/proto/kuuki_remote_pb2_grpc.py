@@ -156,6 +156,11 @@ class RemoteControlStub:
                 request_serializer=kuuki__remote__pb2.FindTextRequest.SerializeToString,
                 response_deserializer=kuuki__remote__pb2.FindTextReply.FromString,
                 _registered_method=True)
+        self.ClickText = channel.unary_unary(
+                '/kuuki.remote.v1.RemoteControl/ClickText',
+                request_serializer=kuuki__remote__pb2.ClickTextRequest.SerializeToString,
+                response_deserializer=kuuki__remote__pb2.ClickTextReply.FromString,
+                _registered_method=True)
         self.ListWindows = channel.unary_unary(
                 '/kuuki.remote.v1.RemoteControl/ListWindows',
                 request_serializer=kuuki__remote__pb2.ListWindowsRequest.SerializeToString,
@@ -340,6 +345,12 @@ class RemoteControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def ClickText(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListWindows(self, request, context):
         """窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
         """
@@ -495,6 +506,11 @@ def add_RemoteControlServicer_to_server(servicer, server):
                     servicer.FindText,
                     request_deserializer=kuuki__remote__pb2.FindTextRequest.FromString,
                     response_serializer=kuuki__remote__pb2.FindTextReply.SerializeToString,
+            ),
+            'ClickText': grpc.unary_unary_rpc_method_handler(
+                    servicer.ClickText,
+                    request_deserializer=kuuki__remote__pb2.ClickTextRequest.FromString,
+                    response_serializer=kuuki__remote__pb2.ClickTextReply.SerializeToString,
             ),
             'ListWindows': grpc.unary_unary_rpc_method_handler(
                     servicer.ListWindows,
@@ -1172,6 +1188,33 @@ class RemoteControl:
             '/kuuki.remote.v1.RemoteControl/FindText',
             kuuki__remote__pb2.FindTextRequest.SerializeToString,
             kuuki__remote__pb2.FindTextReply.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ClickText(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/kuuki.remote.v1.RemoteControl/ClickText',
+            kuuki__remote__pb2.ClickTextRequest.SerializeToString,
+            kuuki__remote__pb2.ClickTextReply.FromString,
             options,
             channel_credentials,
             insecure,

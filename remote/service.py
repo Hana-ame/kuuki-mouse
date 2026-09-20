@@ -88,6 +88,24 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     raise RemoteError("bad_request", f"参数应是 true/false, 收到 {value!r}")
 
 
+def _click_plan(args: dict) -> dict:
+    """解析出"这一下怎么点" —— ``mouse.click`` 与 ``screen.click_text`` 共用。
+
+    两处各写一份默认值的话, "改了默认 hold 只改了一边"这种偏差根本进不了比对
+    (两条传输一起错, 看上去是一致的)。而且 ``click_text`` 在 ``dry_run`` 时也要
+    把这些值**回显** —— 回显的与真点的必须是同一份解析结果。
+    """
+    return {
+        "button": _as_str(args.get("button"), "button", "left"),
+        "clicks": _as_int(args.get("clicks", args.get("count")), "clicks", 1),
+        "interval": _as_float(args.get("interval"), "interval", 0.05),
+        # hold 默认 60ms: 瞬时 down/up 会被某些前端框架当成无效点击 (实测见
+        # input.click 的注释, 与 remote/win 那个瞬时连击是同一个坑)
+        "hold": _as_float(args.get("hold"), "hold", 0.06),
+        "move_duration": _as_float(args.get("move_duration"), "move_duration", 0.0),
+    }
+
+
 def parse_points(value: Any) -> list:
     """把路径点归一成 ``[[x, y], ...]``。
 
@@ -150,6 +168,7 @@ class RemoteService:
             "screen.screenshot": self._op_screen_screenshot,
             "screen.ocr": self._op_screen_ocr,
             "screen.find_text": self._op_screen_find_text,
+            "screen.click_text": self._op_screen_click_text,
             "screen.calibrate": self._op_screen_calibrate,
             "mouse.position": self._op_mouse_position,
             "mouse.move": self._op_mouse_move,
@@ -181,6 +200,8 @@ class RemoteService:
             "find_text": "screen.find_text",
             "find": "screen.find_text",
             "findtext": "screen.find_text",
+            "click_text": "screen.click_text",
+            "clicktext": "screen.click_text",
             "size": "screen.size",
             "monitors": "screen.monitors",
             "monitor": "screen.monitors",
@@ -528,6 +549,67 @@ class RemoteService:
             "origin": report.get("origin") or {"x": 0, "y": 0},
         }
 
+    def _op_screen_click_text(self, args: dict) -> dict:
+        """找到写着某段文字的那块**并点它** —— ``find_text`` + ``click`` 合成一次。
+
+        为什么要合成: 分成两次调用的话, 找和点之间隔着一整个来回, 而这期间屏幕
+        可能已经变了 (会滚动的列表、会刷新的页面) —— 点在"刚才那一帧的坐标"上,
+        点中的可能已经不是那一行了。合成之后, 找与点落在同一帧上。
+
+        三条与 ``find_text`` 不同的口径:
+
+        * **没找到要报错** (``not_found``): 调用方要求的是"点它", 做不到必须说
+          清楚; 静默回个 ``found=false`` 会被当成"点了" —— 查询可以空手而归,
+          动作不行。
+        * ``index`` 选第几个匹配 (默认 0 = 最靠上的那个), 越界报 ``bad_request``。
+        * ``dry_run`` 只报坐标不点 —— 先看清楚会点在哪, 再真的点。
+        """
+        from . import ocr
+
+        if not ocr.ocr_supported():
+            raise RemoteError("unsupported", "文字识别需要被控端是 Windows (走系统内置 OCR)")
+        # index 要按匹配列表取, 所以这里必须先要全部匹配 (find_text 默认只给一个)
+        found = self._op_screen_find_text(dict(args, all=True))
+        items = found["items"]
+        if not items:
+            raise RemoteError(
+                "not_found", f"屏幕上没有写着 {found.get('query')!r} 的文字"
+            )
+        index = _as_int(args.get("index"), 0) if args.get("index") is not None else 0
+        if index < 0 or index >= len(items):
+            raise RemoteError(
+                "bad_request",
+                f"只找到 {len(items)} 处, 取不到第 {index} 个 (0 起算)",
+            )
+        target = items[index]
+        plan = _click_plan(args)
+        dry_run = _as_bool(args.get("dry_run"), False)
+        if not dry_run:
+            self.controller.click(
+                plan["button"], plan["clicks"], plan["interval"], plan["hold"],
+                target["center"]["x"], target["center"]["y"], plan["move_duration"],
+            )
+        return {
+            "ok": True,
+            "found": True,
+            "clicked": not dry_run,
+            "dry_run": bool(dry_run),
+            "query": found["query"],
+            "match": found["match"],
+            "unit": found["unit"],
+            "language": found.get("language", ""),
+            "index": index,
+            "matches": len(items),
+            "item": target,
+            # 点击参数一律回显 (含 dry_run): 不回显就测不出"某条传输把它们丢了",
+            # 而 dry_run 时更糟 —— 调用方会以为自己看清了将要发生什么
+            "button": plan["button"],
+            "clicks": plan["clicks"],
+            "interval": plan["interval"],
+            "hold": plan["hold"],
+            "positioned_at": dict(target["center"]),
+        }
+
     def _op_screen_calibrate(self, args: dict) -> dict:
         """跑一次坐标校准 —— 见 ``remote/calibrate.py`` 的模块说明。
 
@@ -570,11 +652,7 @@ class RemoteService:
         return {"x": x, "y": y, "dx": dx, "dy": dy}
 
     def _op_mouse_click(self, args: dict) -> dict:
-        button = _as_str(args.get("button"), "button", "left")
-        clicks = _as_int(args.get("clicks", args.get("count")), "clicks", 1)
-        interval = _as_float(args.get("interval"), "interval", 0.05)
-        # hold 默认 60ms: 瞬时 down/up 会被某些前端框架当成无效点击
-        hold = _as_float(args.get("hold"), "hold", 0.06)
+        plan = _click_plan(args)
         # x / y 可选: 先定位再点。缺省表示点当前位置。以前这里两个参数被忽略了,
         # 传 {"x":..,"y":..} 会静默点在当前光标处 (后来才发现的 bug, 见
         # docs/knowledge/protocol-mouse-click-ignores-xy.md)。
@@ -582,12 +660,19 @@ class RemoteService:
         y = args.get("y")
         x = _as_int(x, "x") if x is not None else None
         y = _as_int(y, "y") if y is not None else None
-        move_duration = _as_float(args.get("move_duration"), "move_duration", 0.0)
-        done = self.controller.click(button, clicks, interval, hold, x, y, move_duration)
+        done = self.controller.click(
+            plan["button"], plan["clicks"], plan["interval"], plan["hold"],
+            x, y, plan["move_duration"],
+        )
         # interval 也回进返回值: 它是"这次点击怎么执行的"的一部分, 而且只有回进来
         # 才能跨传输比对 —— 否则 gRPC 侧把显式 0 换成默认值这种偏差测不出来
         # (hold 同理, 它就是在补 hold 字段时靠返回值抓出来的)
-        result = {"button": button, "clicks": done, "hold": hold, "interval": interval}
+        result = {
+            "button": plan["button"],
+            "clicks": done,
+            "hold": plan["hold"],
+            "interval": plan["interval"],
+        }
         if x is not None or y is not None:
             result["positioned_at"] = {"x": x, "y": y}
         return result

@@ -752,6 +752,76 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             reply.items.append(entry)
         return reply
 
+    # ---------------- 找到那块并点它 ----------------
+    @staticmethod
+    def _click_text_args(request) -> dict:
+        """``ClickTextRequest`` -> service 的 args。
+
+        找的部分直接复用 ``_find_text_args`` (同一套参数、同一套 HasField 规矩);
+        点那几个字段全是 optional —— ``interval=0`` / ``hold=0`` / ``index=0`` /
+        ``dry_run=False`` 都是有意义的值, 只能靠 ``HasField`` 判断给没给。
+        """
+        args = RemoteControlServicer._find_text_args(request.find)
+        if request.HasField("button"):
+            args["button"] = request.button
+        if request.HasField("count"):
+            args["count"] = int(request.count)
+        if request.HasField("interval"):
+            args["interval"] = float(request.interval)
+        if request.HasField("hold"):
+            args["hold"] = float(request.hold)
+        if request.HasField("index"):
+            args["index"] = int(request.index)
+        if request.HasField("dry_run"):
+            args["dry_run"] = bool(request.dry_run)
+        if request.HasField("move_duration"):
+            args["move_duration"] = float(request.move_duration)
+        return args
+
+    def ClickText(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle("screen.click_text", self._click_text_args(request))
+        return self._to_click_text(result)
+
+    @staticmethod
+    def _to_click_text(result: dict):
+        reply = pb.ClickTextReply(
+            ok=bool(result.get("ok")),
+            found=bool(result.get("found")),
+            clicked=bool(result.get("clicked")),
+            dry_run=bool(result.get("dry_run")),
+            query=result.get("query", ""),
+            match=result.get("match", ""),
+            unit=result.get("unit", ""),
+            language=result.get("language", ""),
+            index=int(result.get("index", 0)),
+            matches=int(result.get("matches", 0)),
+            button=result.get("button", ""),
+            clicks=int(result.get("clicks", 0)),
+            interval=float(result.get("interval", 0.0)),
+            hold=float(result.get("hold", 0.0)),
+        )
+        item = result.get("item") or {}
+        entry = pb.FindTextItem(
+            text=item.get("text", ""),
+            x=int(item.get("x", 0)),
+            y=int(item.get("y", 0)),
+            w=int(item.get("w", 0)),
+            h=int(item.get("h", 0)),
+        )
+        entry.screen.CopyFrom(_ocr_rect(item.get("screen")))
+        center = item.get("center") or {}
+        entry.center.CopyFrom(
+            pb.Point(x=int(center.get("x", 0)), y=int(center.get("y", 0)))
+        )
+        reply.item.CopyFrom(entry)
+        at = result.get("positioned_at") or {}
+        reply.positioned_at.CopyFrom(
+            pb.Point(x=int(at.get("x", 0)), y=int(at.get("y", 0)))
+        )
+        return reply
+
     # ---------------- 被控端角标 ----------------
     def Notify(self, request, context):
         self._check_auth(context)

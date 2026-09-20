@@ -291,6 +291,18 @@ class GrpcClient:
             request.limit = int(args["limit"])
         return request
 
+    def _click_text_request(self, args: dict):
+        pb = self._pb
+        request = pb.ClickTextRequest()
+        request.find.CopyFrom(self._find_text_request(args))
+        # 下面几个全是 optional: interval=0 / hold=0 / index=0 / dry_run=False
+        # 都是有意义的值, 只能"给了才写" (与 ClickMouseRequest 同一套规矩)
+        for key in ("button", "count", "interval", "hold", "index",
+                    "dry_run", "move_duration"):
+            if args.get(key) is not None:
+                setattr(request, key, args[key])
+        return request
+
     def _scroll_request(self, args: dict):
         pb = self._pb
         request = pb.ScrollRequest(
@@ -404,6 +416,9 @@ class GrpcClient:
             "screen.ocr": lambda: self.stub.Ocr(self._ocr_request(args), **self._kwargs()),
             "screen.find_text": lambda: self.stub.FindText(
                 self._find_text_request(args), **self._kwargs()
+            ),
+            "screen.click_text": lambda: self.stub.ClickText(
+                self._click_text_request(args), **self._kwargs()
             ),
             "mouse.position": lambda: self.stub.GetMousePosition(empty, **self._kwargs()),
             "mouse.move": lambda: self.stub.MoveMouse(
@@ -571,6 +586,28 @@ def _write_frame(directory: str, prefix: str, index: int, header: dict, payload:
     return path
 
 
+def _add_find_args(parser: "argparse.ArgumentParser") -> None:
+    """``find-text`` / ``click-text`` 共用的"找什么"那部分参数。
+
+    两个子命令各抄一份的话, "给 find-text 加了 --lang、click-text 没有"这种偏差
+    是最容易出现的 —— 而且两边都是"能跑, 只是少个功能", 不会报错。
+    """
+    parser.add_argument("query", help="要找的文字 (--match regex 时是正则)")
+    parser.add_argument("--match", default="contains", choices=("contains", "exact", "regex"),
+                        help="怎么算命中 (默认 contains)")
+    parser.add_argument("--unit", default="line", choices=("line", "word"),
+                        help="按行匹配还是按词 (默认 line: 中文会被逐字切成词)")
+    parser.add_argument("--case-sensitive", action="store_true", help="区分大小写")
+    parser.add_argument("--all", action="store_true", help="返回全部匹配 (默认只给最靠上的)")
+    parser.add_argument("--limit", type=int, default=None, help="最多返回几个 (配合 --all)")
+    parser.add_argument("--region", default=None, help="只在这一块里找: left,top,width,height")
+    parser.add_argument("--monitor", type=int, default=None,
+                        help="找第几块屏 (下标, 见 monitors)")
+    parser.add_argument("--all-screens", action="store_true", help="找整个虚拟桌面")
+    parser.add_argument("--lang", default="",
+                        help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m remote.client",
@@ -668,19 +705,22 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     # 按文字定位: ocr 把整屏的字都给你, 这一个只回"写着它的那块" —— 含能直接
     # 点的中心点坐标
     find = sub.add_parser("find-text", help="找屏幕上写着某段文字的那块 (OCR)")
-    find.add_argument("query", help="要找的文字 (--match regex 时是正则)")
-    find.add_argument("--match", default="contains", choices=("contains", "exact", "regex"),
-                      help="怎么算命中 (默认 contains)")
-    find.add_argument("--unit", default="line", choices=("line", "word"),
-                      help="按行匹配还是按词 (默认 line: 中文会被逐字切成词)")
-    find.add_argument("--case-sensitive", action="store_true", help="区分大小写")
-    find.add_argument("--all", action="store_true", help="返回全部匹配 (默认只给最靠上的)")
-    find.add_argument("--limit", type=int, default=None, help="最多返回几个 (配合 --all)")
-    find.add_argument("--region", default=None, help="只在这一块里找: left,top,width,height")
-    find.add_argument("--monitor", type=int, default=None, help="找第几块屏 (下标, 见 monitors)")
-    find.add_argument("--all-screens", action="store_true", help="找整个虚拟桌面")
-    find.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
+    _add_find_args(find)
     find.add_argument("--json", action="store_true", help="输出完整 JSON (默认是简报)")
+
+    # 找到就点: 与 find-text 同一套"找什么", 多一组"怎么点" (合成一次调用 —— 分成
+    # 两次的话, 找与点之间屏幕可能已经变了)
+    click = sub.add_parser("click-text", help="找屏幕上写着某段文字的那块并点它 (OCR)")
+    _add_find_args(click)
+    click.add_argument("--index", type=int, default=None,
+                       help="命中多个时点第几个 (默认 0 = 最靠上的)")
+    click.add_argument("--button", default=None, help="left / right / middle")
+    click.add_argument("--count", type=int, default=None, help="点几下 (双击给 2)")
+    click.add_argument("--interval", type=float, default=None, help="多下之间的间隔 (秒)")
+    click.add_argument("--hold", type=float, default=None, help="按下与抬起之间隔多久 (秒)")
+    click.add_argument("--move-duration", type=float, default=None, help="先平滑移过去 (秒)")
+    click.add_argument("--dry-run", action="store_true", help="只报会点在哪, 不真的点")
+    click.add_argument("--json", action="store_true", help="输出完整 JSON (默认是简报)")
 
     loc = sub.add_parser("locate", help="在屏幕里定位目标 (颜色/模板/帧差/概览)")
     loc.add_argument("--describe", action="store_true", help="输出网格概览 (默认就是这个)")
@@ -812,6 +852,38 @@ def _find_text_args(args: argparse.Namespace) -> dict:
     if getattr(args, "lang", ""):
         out["lang"] = args.lang
     return out
+
+
+def _click_text_args(args: argparse.Namespace) -> dict:
+    """``click-text`` 子命令 -> ``screen.click_text`` 的 args。
+
+    找的部分直接复用 ``_find_text_args``; 点那几个只在**真的给了**时才放进 args ——
+    ``--interval 0`` / ``--hold 0`` / ``--index 0`` 都是有意义的值, 写成
+    ``args.get(k) or 默认`` 会把显式 0 吞掉。
+    """
+    out = _find_text_args(args)
+    for key in ("index", "button", "count", "interval", "hold", "move_duration"):
+        value = getattr(args, key, None)
+        if value is not None:
+            out[key] = value
+    if getattr(args, "dry_run", False):
+        out["dry_run"] = True
+    return out
+
+
+def _print_click_text(result: dict, as_json: bool = False) -> None:
+    """点完就一句话说清点在哪 —— 下一步通常是看"是不是点错了"。"""
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    item = result.get("item") or {}
+    at = result.get("positioned_at") or {}
+    action = "会点在" if result.get("dry_run") else "已点在"
+    print(
+        f"{action} ({at.get('x')},{at.get('y')}) · "
+        f"第 {result.get('index')}/{result.get('matches')} 处 · "
+        f"{result.get('button')} ×{result.get('clicks')} · {item.get('text')!r}"
+    )
 
 
 def _print_find_text(result: dict, as_json: bool = False) -> None:
@@ -1102,6 +1174,10 @@ async def _run_ws(args: argparse.Namespace) -> int:
             result = await client.call("screen.find_text", _find_text_args(args))
             _print_find_text(result, getattr(args, "json", False))
             return 0
+        if args.action == "click-text":
+            result = await client.call("screen.click_text", _click_text_args(args))
+            _print_click_text(result, getattr(args, "json", False))
+            return 0
         if args.action == "calibrate":
             result = await client.call("screen.calibrate", _calibrate_args(args))
             _print_calibration(result, args.save)
@@ -1178,6 +1254,10 @@ def _run_grpc(args: argparse.Namespace) -> int:
         if args.action == "find-text":
             result = client.call("screen.find_text", _find_text_args(args))
             _print_find_text(result, getattr(args, "json", False))
+            return 0
+        if args.action == "click-text":
+            result = client.call("screen.click_text", _click_text_args(args))
+            _print_click_text(result, getattr(args, "json", False))
             return 0
         if args.action == "calibrate":
             result = client.call("screen.calibrate", _calibrate_args(args))
@@ -1284,6 +1364,10 @@ async def _run_peerjs(args: argparse.Namespace) -> int:
         if args.action == "find-text":
             result = await client.call("screen.find_text", _find_text_args(args))
             _print_find_text(result, getattr(args, "json", False))
+            return 0
+        if args.action == "click-text":
+            result = await client.call("screen.click_text", _click_text_args(args))
+            _print_click_text(result, getattr(args, "json", False))
             return 0
         if args.action == "calibrate":
             result = await client.call("screen.calibrate", _calibrate_args(args))

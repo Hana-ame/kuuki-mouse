@@ -886,6 +886,24 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
     ocr.add_argument("--no-words", action="store_true", help="不要逐词的矩形 (省体积)")
 
+    # 按文字定位: 多机编排里"点写着『下一步』的那个按钮"比"点 (932, 604)"稳 ——
+    # 每台机器的窗口位置、语言、版本都可能不一样
+    find = _add_action(sub, "find-text", "找屏幕上写着某段文字的那块 (OCR)")
+    find.add_argument("--query", required=True, help="要找的文字 (--match regex 时是正则)")
+    find.add_argument("--match", default="contains", choices=("contains", "exact", "regex"),
+                      help="怎么算命中 (默认 contains)")
+    find.add_argument("--unit", default="line", choices=("line", "word"),
+                      help="按行匹配还是按词 (默认 line)")
+    find.add_argument("--case-sensitive", action="store_true", help="区分大小写")
+    # 不叫 --all: 那个名字在 ctl 里是"发给所有机器" (全局开关), 会撞
+    find.add_argument("--all-matches", action="store_true",
+                      help="返回全部匹配 (默认只给最靠上的)")
+    find.add_argument("--limit", type=int, default=None, help="最多返回几个 (配合 --all)")
+    find.add_argument("--region", default=None, help="只在这一块里找: left,top,width,height")
+    find.add_argument("--monitor", type=int, default=None, help="找第几块屏 (下标)")
+    find.add_argument("--all-screens", action="store_true", help="找整个虚拟桌面")
+    find.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
+
     focus = _add_action(sub, "focus", "把受控端某个窗口切到前台")
     focus.add_argument("--hwnd", type=int, default=None, help="窗口句柄 (最可靠)")
     focus.add_argument("--title", default="", help="标题子串")
@@ -1046,6 +1064,27 @@ def _machine_op(args: argparse.Namespace) -> Tuple[str, dict]:
         if args.no_words:
             payload["include_words"] = False
         return "screen.ocr", payload
+    if command == "find-text":
+        payload: Dict[str, Any] = {
+            "query": args.query,
+            "match": args.match,
+            "unit": args.unit,
+        }
+        if args.case_sensitive:
+            payload["case_sensitive"] = True
+        if args.all_matches:
+            payload["all"] = True
+        if args.limit is not None:
+            payload["limit"] = int(args.limit)
+        if args.region:
+            payload["region"] = [int(v) for v in args.region.split(",")]
+        if args.monitor is not None:
+            payload["monitor"] = int(args.monitor)
+        if args.all_screens:
+            payload["all_screens"] = True
+        if args.lang:
+            payload["lang"] = args.lang
+        return "screen.find_text", payload
     if command == "focus":
         payload: Dict[str, Any] = {"title": args.title, "process": args.process}
         if args.hwnd is not None:

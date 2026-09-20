@@ -268,6 +268,29 @@ class GrpcClient:
             request.include_words = bool(args["include_words"])
         return request
 
+    def _find_text_request(self, args: dict):
+        pb = self._pb
+        request = pb.FindTextRequest(
+            query=str(args.get("query", "") or ""),
+            lang=args.get("lang", "") or "",
+            match=str(args.get("match", "") or ""),
+            unit=str(args.get("unit", "") or ""),
+            case_sensitive=bool(args.get("case_sensitive", False)),
+            all=bool(args.get("all", False)),
+        )
+        rect = self._rect(args.get("region"))
+        if rect is not None:
+            request.region.CopyFrom(rect)
+        # 与 _ocr_request 同一套: monitor=0 / all_screens=False 是显式给的
+        if args.get("monitor") is not None:
+            request.monitor = int(args["monitor"])
+        if args.get("all_screens") is not None:
+            request.all_screens = bool(args["all_screens"])
+        # limit=0 是"不限", 但它是 optional —— 给了就照给, 让服务端看到显式 0
+        if args.get("limit") is not None:
+            request.limit = int(args["limit"])
+        return request
+
     def _scroll_request(self, args: dict):
         pb = self._pb
         request = pb.ScrollRequest(
@@ -379,6 +402,9 @@ class GrpcClient:
                 pb.MonitorsRequest(**_optional_int(args, "x", "y")), **self._kwargs()
             ),
             "screen.ocr": lambda: self.stub.Ocr(self._ocr_request(args), **self._kwargs()),
+            "screen.find_text": lambda: self.stub.FindText(
+                self._find_text_request(args), **self._kwargs()
+            ),
             "mouse.position": lambda: self.stub.GetMousePosition(empty, **self._kwargs()),
             "mouse.move": lambda: self.stub.MoveMouse(
                 pb.MoveMouseRequest(
@@ -639,6 +665,23 @@ def _add_actions(parser: argparse.ArgumentParser) -> None:
     ocr.add_argument("--no-words", action="store_true", help="不要逐词的矩形 (省体积)")
     ocr.add_argument("--json", action="store_true", help="输出完整 JSON (默认是逐行简报)")
 
+    # 按文字定位: ocr 把整屏的字都给你, 这一个只回"写着它的那块" —— 含能直接
+    # 点的中心点坐标
+    find = sub.add_parser("find-text", help="找屏幕上写着某段文字的那块 (OCR)")
+    find.add_argument("query", help="要找的文字 (--match regex 时是正则)")
+    find.add_argument("--match", default="contains", choices=("contains", "exact", "regex"),
+                      help="怎么算命中 (默认 contains)")
+    find.add_argument("--unit", default="line", choices=("line", "word"),
+                      help="按行匹配还是按词 (默认 line: 中文会被逐字切成词)")
+    find.add_argument("--case-sensitive", action="store_true", help="区分大小写")
+    find.add_argument("--all", action="store_true", help="返回全部匹配 (默认只给最靠上的)")
+    find.add_argument("--limit", type=int, default=None, help="最多返回几个 (配合 --all)")
+    find.add_argument("--region", default=None, help="只在这一块里找: left,top,width,height")
+    find.add_argument("--monitor", type=int, default=None, help="找第几块屏 (下标, 见 monitors)")
+    find.add_argument("--all-screens", action="store_true", help="找整个虚拟桌面")
+    find.add_argument("--lang", default="", help="语言 tag (zh-Hans-CN); 空 = 按受控端语言偏好")
+    find.add_argument("--json", action="store_true", help="输出完整 JSON (默认是简报)")
+
     loc = sub.add_parser("locate", help="在屏幕里定位目标 (颜色/模板/帧差/概览)")
     loc.add_argument("--describe", action="store_true", help="输出网格概览 (默认就是这个)")
     loc.add_argument("--dominant", action="store_true", help="列出主色调")
@@ -740,6 +783,58 @@ def _print_ocr(result: dict, as_json: bool = False) -> None:
     for line in lines:
         screen = line.get("screen") or {}
         print(f"  ({screen.get('x')},{screen.get('y')}) {line.get('text')}")
+
+
+def _find_text_args(args: argparse.Namespace) -> dict:
+    """``find-text`` 子命令 -> ``screen.find_text`` 的 args。
+
+    ``match`` / ``unit`` 无条件发: 它们在返回值里**回显**, 不发的话服务端按默认
+    处理, 调用方看到的回显就是默认值 —— 看上去一致, 但"这条传输把参数弄丢了"
+    就永远测不出来 (``protocol-optional-param-needs-echo.md``)。
+    """
+    out: Dict[str, Any] = {
+        "query": args.query,
+        "match": args.match,
+        "unit": args.unit,
+    }
+    if getattr(args, "case_sensitive", False):
+        out["case_sensitive"] = True
+    if getattr(args, "all", False):
+        out["all"] = True
+    if getattr(args, "limit", None) is not None:
+        out["limit"] = int(args.limit)
+    if getattr(args, "region", None):
+        out["region"] = [int(v) for v in args.region.split(",")]
+    if getattr(args, "monitor", None) is not None:
+        out["monitor"] = int(args.monitor)
+    if getattr(args, "all_screens", False):
+        out["all_screens"] = True
+    if getattr(args, "lang", ""):
+        out["lang"] = args.lang
+    return out
+
+
+def _print_find_text(result: dict, as_json: bool = False) -> None:
+    """找到的东西默认就打印成"坐标 + 文字", 因为下一步就是拿坐标去点。"""
+    if as_json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
+    items = result.get("items") or []
+    print(
+        f"找 {result.get('query')!r} · {result.get('match')}/{result.get('unit')} · "
+        f"命中 {len(items)} 处 · 语言 {result.get('language') or '-'}"
+    )
+    if not items:
+        print("  没找到")
+        return
+    for item in items:
+        screen = item.get("screen") or {}
+        center = item.get("center") or {}
+        print(
+            f"  center=({center.get('x')},{center.get('y')}) "
+            f"rect=({screen.get('x')},{screen.get('y')},"
+            f"{screen.get('w')}x{screen.get('h')}) {item.get('text')!r}"
+        )
 
 
 def _calibrate_args(args: argparse.Namespace) -> dict:
@@ -1003,6 +1098,10 @@ async def _run_ws(args: argparse.Namespace) -> int:
             result = await client.call("screen.ocr", _ocr_args(args))
             _print_ocr(result, getattr(args, "json", False))
             return 0
+        if args.action == "find-text":
+            result = await client.call("screen.find_text", _find_text_args(args))
+            _print_find_text(result, getattr(args, "json", False))
+            return 0
         if args.action == "calibrate":
             result = await client.call("screen.calibrate", _calibrate_args(args))
             _print_calibration(result, args.save)
@@ -1075,6 +1174,10 @@ def _run_grpc(args: argparse.Namespace) -> int:
         if args.action == "ocr":
             result = client.call("screen.ocr", _ocr_args(args))
             _print_ocr(result, getattr(args, "json", False))
+            return 0
+        if args.action == "find-text":
+            result = client.call("screen.find_text", _find_text_args(args))
+            _print_find_text(result, getattr(args, "json", False))
             return 0
         if args.action == "calibrate":
             result = client.call("screen.calibrate", _calibrate_args(args))
@@ -1177,6 +1280,10 @@ async def _run_peerjs(args: argparse.Namespace) -> int:
         if args.action == "ocr":
             result = await client.call("screen.ocr", _ocr_args(args))
             _print_ocr(result, getattr(args, "json", False))
+            return 0
+        if args.action == "find-text":
+            result = await client.call("screen.find_text", _find_text_args(args))
+            _print_find_text(result, getattr(args, "json", False))
             return 0
         if args.action == "calibrate":
             result = await client.call("screen.calibrate", _calibrate_args(args))

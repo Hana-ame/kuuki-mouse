@@ -216,7 +216,17 @@ jobs:
           set -e
           cat ocr.json
           grep -q '"count"\|unsupported' ocr.json
-          echo "端到端通过: WS / gRPC / kuuki 老协议透传 / OCR 四条路都通"
+
+          # 按文字定位 (screen.find_text): 与 ocr 同一条链路, 但多一层"筛 + 算中心
+          # 点"。这里只验"够得着" —— 无头会话里未必有字, 所以 found / not found
+          # 都算通, 只有崩了 (ModuleNotFoundError / 参数翻译错) 才算失败。
+          set +e
+          python -m remote.client ws --url ws://127.0.0.1:$WS_PORT \
+            find-text Send --json > find_text.json 2>&1
+          set -e
+          cat find_text.json
+          grep -q '"found"\|unsupported' find_text.json
+          echo "端到端通过: WS / gRPC / kuuki 老协议透传 / OCR / find_text 五条路都通"
 
       - name: 深度冒烟 —— 真起一次 PeerJS 服务 (需要外网, 失败不阻塞)
         # 只开 PeerJS 一个传输, 看它能不能注册到公开 broker 拿到房间码。

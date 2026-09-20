@@ -318,6 +318,38 @@ python -m remote.ctl ocr -a                             # 多机: 每台各自�
 - 中文常被切成一个字一个"词" (`"中 文 识 别"`): WinRT 的 OcrWord 就是这么切的,
   要整句就直接用 `lines[].text`。
 
+### 3.1.6 `find-text`: 找写着某段文字的那块, 直接给能点的坐标
+
+`ocr` 把整屏的字都给出来, 而调用方多半只要一句"『发送』在哪"。`screen.find_text`
+把认、筛、排序、算中心点合成一次调用 —— 返回值里的 `center` 就是**屏幕坐标**上的
+中心点, 直接喂给 `mouse.click`:
+
+```bash
+python -m remote.client ws find-text 发送                     # 默认按行、只给最靠上的
+python -m remote.client ws find-text OK --unit word --all     # 按词匹配, 给全部命中
+python -m remote.client ws find-text '[0-9]+ 条' --match regex  # 正则
+python -m remote.client ws find-text 发送 --json              # 要完整结构
+python -m remote.ctl find-text --query 下一步 -a              # 多机各找各的
+```
+
+```json
+{"ok": true, "query": "发送", "match": "contains", "unit": "line",
+ "case_sensitive": false, "language": "zh-Hans-CN",
+ "found": true, "count": 1, "scale": 1.0, "origin": {"x": 0, "y": 0},
+ "items": [{"text": "发送", "x": 120, "y": 300, "w": 60, "h": 28,
+            "screen": {"x": 120, "y": 300, "w": 60, "h": 28},
+            "center": {"x": 150, "y": 314}}]}
+```
+
+- `unit` 默认 `line`: 中文会被引擎**逐字**切成很多"词" (见上一节), 词级匹配在这种
+  文本上几乎命中不了 —— 要更紧的框 (只框"发送"而不是整行"发送(S)") 再给 `--unit word`。
+- `all` 默认关: 只回**最靠上**的那个 (按阅读顺序排过序), 因为"找按钮"要的是那一个。
+  要一屏里所有同名的给 `--all`, 再用 `--limit` 截断。
+- **没找到不算错**: `found=false` + `items: []`, 不抛异常 —— 屏幕上没有这个字是正常
+  结果, 报错留给参数写错 / 平台不支持 (`bad_request` / `unsupported`)。
+- `match` / `unit` / `case_sensitive` 都在返回值里**回显**: 参数不回显的话,"某条传输
+  把它悄悄丢了"永远测不出来 (服务端按默认处理, 一切看起来正常)。
+
 ### 3.2 `python -m remote.ctl` (多机控制级)
 
 先把机器记进 registry (`~/.kuuki/registry.json`, `--registry` 可改), 之后按**别名 / 组 / 全体**
@@ -548,6 +580,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `screen.monitors` *`monitors`/`monitor`/`screens`* | `x` `y` (都给了才是单点查询) | 显示器与虚拟桌面边界 —— 多屏校准的前置信息, 见 3.1.3。仅 Windows 受控端 |
 | `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` `monitor` `all_screens` | 抓一帧。`monitor`=第几块屏 / `all_screens`=整个虚拟桌面 (都不给 = 主屏), 返回值带 `origin` (这一帧左上角在虚拟桌面坐标系里的位置), 见 3.1.4 |
 | `screen.ocr` *`ocr`/`read`* | `region` `monitor` `all_screens` `lang` `include_words` | 认出这一屏上的**文字** (系统内置 OCR), 每行/每词都带能直接点的屏幕坐标, 见 3.1.5。**仅 Windows 受控端**, 每次约 1 秒 |
+| `screen.find_text` *`find_text`/`find`/`findtext`* | `query` `match` `unit` `case_sensitive` `all` `limit` `region` `monitor` `all_screens` `lang` | 找**写着某段文字的那块**, 回能直接点的中心点坐标 (`center`), 见 3.1.6。仅 Windows 受控端 |
 | `screen.grab` | 同上 | 同上, 强制二进制帧 —— **仅 WS** (`remote/ws_server.py` 直接处理) |
 | `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 —— **仅 WS**; gRPC 走 `StreamScreenshots` 服务端流式 |
 | `mouse.position` *`position`* | — | 当前光标 |
@@ -696,13 +729,15 @@ python -m remote --selftest --selftest-input
 - **动作增强**: 多步滚动的总量守恒 (3 格 / 5 步 → 每步 1 格, 不丢余数)、
   路径点拖动整条只按一次松一次、组合键 `hold_ms`、`keyboard.hold` 长按 —— 全部用
   假鼠标/假键盘断言, 不碰真实光标与按键。
-- **三传输等价**: 22 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
+- **三传输等价**: 26 个动作用例分别经 WS 与 gRPC 下发, 返回值与副作用逐条比对一致。
   边界上也一致 —— `interval=0` / `duration=0` 这类"显式给 0"与"没给"能区分开
   (proto3 普通标量做不到, 相关字段已改成 `optional`)。窗口 op 另有 7 个用例
   (打桩后端跨传输比对, 不动真桌面), `screen.calibrate` / `screen.monitors` /
-  `screen.ocr` 也在这 22 项里 —— 它们的 proto reply 形状刻意做得与 service 返回的
-  dict 一致, 就是为了能逐字段比对 (OCR 那三条的引擎是打桩的: 真起一次外部进程要
-  1 秒, 而这里要比的是两条传输的翻译层)。
+  `screen.ocr` / `screen.find_text` 也在这 26 项里 —— 它们的 proto reply 形状刻意
+  做得与 service 返回的 dict 一致, 就是为了能逐字段比对 (OCR 那七条的引擎是打桩
+  的: 真起一次外部进程要 1 秒, 而这里要比的是两条传输的翻译层)。
+  `find_text` 那四条里有一条是**没命中**的 —— 空 repeated 在 protobuf 转 dict 时
+  照样会出现, 一边给 `[]` 一边不给键就会红。
 - **窗口 op + 端到端**: `window.list` 列出真实桌面窗口 (标题/进程/pid/Z 序),
   `window.focus` 在 Code 与 msedge 之间来回切换且 `focused` / `window.foreground`
   逐一吻合。用"focus 认窗口 → 点进提问框 → paste → 帧差否证 → 回车"的**纯 repo**

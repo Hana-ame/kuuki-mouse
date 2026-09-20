@@ -17,7 +17,7 @@ import os
 import platform
 import sys
 import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .screen import Capture, ScreenCapture
 
@@ -149,6 +149,7 @@ class RemoteService:
             "screen.monitors": self._op_screen_monitors,
             "screen.screenshot": self._op_screen_screenshot,
             "screen.ocr": self._op_screen_ocr,
+            "screen.find_text": self._op_screen_find_text,
             "screen.calibrate": self._op_screen_calibrate,
             "mouse.position": self._op_mouse_position,
             "mouse.move": self._op_mouse_move,
@@ -177,6 +178,9 @@ class RemoteService:
             "capture": "screen.screenshot",
             "ocr": "screen.ocr",
             "read": "screen.ocr",
+            "find_text": "screen.find_text",
+            "find": "screen.find_text",
+            "findtext": "screen.find_text",
             "size": "screen.size",
             "monitors": "screen.monitors",
             "monitor": "screen.monitors",
@@ -430,6 +434,98 @@ class RemoteService:
             "height": capture.height,
             "scale": round(float(capture.scale), 4),
             "origin": {"x": int(capture.origin[0]), "y": int(capture.origin[1])},
+        }
+
+    def _op_screen_find_text(self, args: dict) -> dict:
+        """在屏幕上找**写着某段文字的那块**, 回它能直接点的坐标。
+
+        ``screen.ocr`` 把整屏的字都认出来, 但调用方多半只要一句"『发送』在哪" ——
+        这一层把"认 + 筛 + 排序 + 算中心点"合成一次调用, 省得每个调用方都自己
+        把行过滤一遍再算中点 (那个中点是**屏幕坐标**上的中点, 不是图坐标上的,
+        自己算就得先把缩放/裁剪/原点三步重做一遍 —— 见 ``ocr.to_screen_rect``)。
+
+        两个默认值是挑过的:
+
+        * ``unit`` 默认 ``line`` —— 中文会被引擎**逐字**切成很多"词", 词级匹配
+          在这种文本上几乎命中不了; 要更紧的框 (比如只框住"发送"两个字而不是
+          整行"发送(S)") 再显式给 ``word``。
+        * ``all`` 默认 False —— 只回**最靠上**的那个 (阅读顺序排序后第一个),
+          因为"找按钮"要的是那一个, 不是一屏里所有同名的。
+
+        没找到**不报错**: 屏幕上没有这个字是正常结果, 不是调用方的错 —— 用
+        ``found`` 表示。报错留给"参数不对 / 平台不支持"这类真的出错的场合。
+        """
+        from . import ocr
+
+        if not ocr.ocr_supported():
+            raise RemoteError("unsupported", "文字识别需要被控端是 Windows (走系统内置 OCR)")
+        query = _as_str(args.get("query", args.get("text")), "query", "")
+        if not query.strip():
+            raise RemoteError("bad_request", "find_text 需要 query (要找的文字)")
+        mode = _as_str(args.get("match") or "contains", "match", "contains").strip().lower()
+        unit = _as_str(args.get("unit") or "line", "unit", "line").strip().lower()
+        if unit not in ("line", "word"):
+            raise RemoteError("bad_request", f"unit 只能是 line / word, 收到 {unit!r}")
+        case_sensitive = _as_bool(args.get("case_sensitive"), False)
+        want_all = _as_bool(args.get("all"), False)
+        # limit 0 / 没给 = 不限。这里不能用 ``or`` 兜底: 0 是"不限"的意思
+        limit = _as_int(args.get("limit"), 0) if args.get("limit") is not None else 0
+        try:
+            matches = ocr.compile_matcher(query, mode, case_sensitive)
+        except ocr.OcrError as exc:
+            raise RemoteError(exc.code, exc.message)
+
+        # 复用 screen.ocr 那一层 (坐标换算的三步都在里面做掉了), 词矩形这一路
+        # 要用到词, 所以强制 include_words —— 这一路不序列化, 没有体积代价
+        report = self._op_screen_ocr(dict(args, include_words=True))
+
+        items: List[Dict[str, Any]] = []
+        for line in report.get("lines") or []:
+            candidates = [line] if unit == "line" else (line.get("words") or [])
+            for found in candidates:
+                if not matches(found.get("text", "")):
+                    continue
+                screen = found.get("screen") or {}
+                left = int(screen.get("x", 0))
+                top = int(screen.get("y", 0))
+                width = int(screen.get("w", 0))
+                height = int(screen.get("h", 0))
+                items.append(
+                    {
+                        "text": found.get("text", ""),
+                        "x": found.get("x", 0),
+                        "y": found.get("y", 0),
+                        "w": found.get("w", 0),
+                        "h": found.get("h", 0),
+                        "screen": screen,
+                        # 中心点: 调用方要点的就是它, 这里算好省得每人再算一遍
+                        "center": {
+                            "x": left + int(round(width / 2.0)),
+                            "y": top + int(round(height / 2.0)),
+                        },
+                    }
+                )
+        # 阅读顺序: 从上到下、从左到右 —— 只回一个时那就是"最靠上的那个"
+        items.sort(key=lambda item: ((item["screen"] or {}).get("y", 0),
+                                     (item["screen"] or {}).get("x", 0)))
+        if not want_all:
+            items = items[:1]
+        if limit > 0:
+            items = items[:limit]
+        return {
+            "ok": True,
+            "query": query,
+            "match": mode,
+            "unit": unit,
+            "case_sensitive": bool(case_sensitive),
+            "language": report.get("language", ""),
+            "found": bool(items),
+            "count": len(items),
+            # 没找到时给空列表而不是报错 (上面说过)。空 repeated 在 protobuf 的
+            # MessageToDict 里照样会出现, 所以 WS 侧也必须是 [] 而不是"不给键"
+            "items": items,
+            "scale": report.get("scale", 1.0),
+            "origin": report.get("origin") or {"x": 0, "y": 0},
         }
 
     def _op_screen_calibrate(self, args: dict) -> dict:

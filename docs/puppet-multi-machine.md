@@ -82,6 +82,7 @@ gRPC 把 `keys: "ctrl+shift+s"` 当成一个键名没拆分、`duration: 0` 被 
 |---|---|---|
 | ~~`screen.monitors`~~ | 屏幕枚举（多显示器坐标对齐要用） | **2026-09-21 已实现**（`remote/monitor.py`，ctypes 只读枚举，见 remote/README 3.1.3） |
 | ~~`screen.ocr`~~ | 认屏幕上的字（多机文案可能不同） | **2026-09-21 已实现**（`remote/ocr.py`，系统内置 OCR，仅 Windows 受控端，见 remote/README 3.1.5） |
+| ~~`screen.find_text`~~ | 找写着某段文字的那块并给可点坐标 | **2026-09-21 已实现**（多机编排里比硬编码坐标稳，见 remote/README 3.1.6） |
 
 ## 4. 控制器 `remote.ctl`（P3，2026-09-20 落地）
 

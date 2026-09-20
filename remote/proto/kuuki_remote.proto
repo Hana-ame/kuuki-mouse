@@ -456,6 +456,51 @@ message OcrReply {
   Point origin = 9;        // 帧左上角在虚拟桌面里的位置 (多屏时不是 0,0)
 }
 
+// ---------------------------------------------------------------- 按文字定位
+//
+// ``screen.find_text``: 在屏幕上找**写着某段文字的那块**, 回它能直接点的坐标。
+// 与 Ocr 的关系: Ocr 是"把整屏的字都给你", 这一层是"你只要那一个" —— 筛、排序、
+// 算中心点都在服务端做掉, 调用方拿到就能点。
+
+message FindTextRequest {
+  string query = 1;            // 要找的文字 (match=regex 时是正则)
+  Rect region = 2;
+  optional uint32 monitor = 3;
+  optional bool all_screens = 4;
+  string lang = 5;
+  string match = 6;            // contains / exact / regex
+  bool case_sensitive = 7;
+  string unit = 8;             // line / word —— 匹配行还是词
+  bool all = 9;                // 要全部匹配 (默认只回最靠上的那个)
+  optional int32 limit = 10;   // 0 = 不限
+}
+
+message FindTextItem {
+  string text = 1;
+  int32 x = 2;                 // 图坐标
+  int32 y = 3;
+  int32 w = 4;
+  int32 h = 5;
+  OcrRect screen = 6;          // 虚拟桌面坐标
+  Point center = 7;            // 上面那个矩形的中心 —— 大多数时候要点的就是它
+}
+
+message FindTextReply {
+  bool ok = 1;
+  // query / match / unit / case_sensitive 一律回显: 参数不进返回值就测不出
+  // "这条传输把它悄悄换了" (protocol-optional-param-needs-echo.md)
+  string query = 2;
+  string match = 3;
+  string unit = 4;
+  bool case_sensitive = 5;
+  string language = 6;
+  bool found = 7;              // 没找到不算错, 用这个表示
+  int32 count = 8;
+  repeated FindTextItem items = 9;
+  double scale = 10;
+  Point origin = 11;
+}
+
 // ---------------------------------------------------------------- 服务
 
 service RemoteControl {
@@ -494,6 +539,7 @@ service RemoteControl {
   rpc Monitors(MonitorsRequest) returns (MonitorsReply);
   // 认屏幕上的字 (系统内置 OCR; 目前仅 Windows 受控端)
   rpc Ocr(OcrRequest) returns (OcrReply);
+  rpc FindText(FindTextRequest) returns (FindTextReply);
 
   // 窗口: 让"视觉定位"有个确定的作用域 (目前仅 Windows 受控端)
   rpc ListWindows(ListWindowsRequest) returns (ListWindowsReply);

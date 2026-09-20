@@ -103,6 +103,7 @@
 - [落笔画线的回测: 三个必须守住的环节 (前台 / 找色板 / drag 时长)](gui-drag-drawing-verification.md)
 - [find_color 的 min_pixels 曾经错杀小目标: 面积换算的 unit 写错了](gui-find-color-area-unit.md)
 - [ImageGrab.grab() 抓的是主显示器, 不是虚拟桌面](gui-imagegrab-primary-not-virtual.md)
+- [按文字定位比按坐标定位稳 (screen.find_text 的取舍)](gui-locate-by-text-not-coordinates.md)
 - [系统 OCR 怎么用: PowerShell + WinRT, 零依赖但只能跑在受控端](gui-ocr-via-powershell-winrt.md)
 - [GUI 自动化的可靠套路：截图闭环](gui-screenshot-loop-and-coordinate-scale.md)
 - [真人正在用这台电脑时，注入会互相干扰](gui-user-interference.md)
@@ -130,4 +131,4 @@
 
 ---
 
-共 **69 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **70 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

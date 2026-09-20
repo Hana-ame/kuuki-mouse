@@ -679,6 +679,79 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             reply.lines.append(item)
         return reply
 
+    # ---------------- 按文字定位 ----------------
+    @staticmethod
+    def _find_text_args(request) -> dict:
+        """``FindTextRequest`` -> service 的 args。
+
+        与 ``_ocr_args`` 同一套规矩: ``monitor`` 的 0、``all_screens`` 的 False
+        都是显式给的, 只能靠 ``HasField``; ``all`` / ``case_sensitive`` 是普通
+        bool, 而 False 正是 service 的默认值 —— 不设也不会走偏, 直接传。
+        """
+        args: dict = {"query": request.query}
+        if request.HasField("region"):
+            args["region"] = {
+                "left": request.region.left,
+                "top": request.region.top,
+                "width": request.region.width,
+                "height": request.region.height,
+            }
+        if request.HasField("monitor"):
+            args["monitor"] = int(request.monitor)
+        if request.HasField("all_screens"):
+            args["all_screens"] = bool(request.all_screens)
+        if request.lang:
+            args["lang"] = request.lang
+        # match / unit 是普通 string, 空串 = service 的默认 (contains / line)
+        if request.match:
+            args["match"] = request.match
+        args["case_sensitive"] = bool(request.case_sensitive)
+        if request.unit:
+            args["unit"] = request.unit
+        args["all"] = bool(request.all)
+        if request.HasField("limit"):
+            args["limit"] = int(request.limit)
+        return args
+
+    def FindText(self, request, context):
+        self._check_auth(context)
+        with _translate(context):
+            result = self.service.handle("screen.find_text", self._find_text_args(request))
+        return self._to_find_text(result)
+
+    @staticmethod
+    def _to_find_text(result: dict):
+        reply = pb.FindTextReply(
+            ok=bool(result.get("ok")),
+            query=result.get("query", ""),
+            match=result.get("match", ""),
+            unit=result.get("unit", ""),
+            case_sensitive=bool(result.get("case_sensitive")),
+            language=result.get("language", ""),
+            found=bool(result.get("found")),
+            count=int(result.get("count", 0)),
+            scale=float(result.get("scale", 0.0)),
+        )
+        origin = result.get("origin") or {}
+        reply.origin.CopyFrom(
+            pb.Point(x=int(origin.get("x", 0)), y=int(origin.get("y", 0)))
+        )
+        for item in result.get("items") or []:
+            entry = pb.FindTextItem(
+                text=item.get("text", ""),
+                x=int(item.get("x", 0)),
+                y=int(item.get("y", 0)),
+                w=int(item.get("w", 0)),
+                h=int(item.get("h", 0)),
+            )
+            entry.screen.CopyFrom(_ocr_rect(item.get("screen")))
+            center = item.get("center") or {}
+            entry.center.CopyFrom(
+                pb.Point(x=int(center.get("x", 0)), y=int(center.get("y", 0)))
+            )
+            reply.items.append(entry)
+        return reply
+
     # ---------------- 被控端角标 ----------------
     def Notify(self, request, context):
         self._check_auth(context)

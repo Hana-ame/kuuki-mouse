@@ -51,11 +51,12 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from PIL import Image
 
@@ -64,9 +65,13 @@ __all__ = [
     "list_languages",
     "recognize",
     "line_rect",
+    "compile_matcher",
     "OcrError",
     "DEFAULT_TIMEOUT",
 ]
+
+#: ``match`` 的几种口径 —— 见 ``compile_matcher``
+MATCH_MODES = ("contains", "exact", "regex")
 
 #: 一次识别最多等多久。PowerShell 冷启动约 1 秒, 大图 + 中文也就几秒
 DEFAULT_TIMEOUT = 30.0
@@ -486,3 +491,42 @@ def to_screen_rect(
         "w": int(round(w / factor)),
         "h": int(round(h / factor)),
     }
+
+
+def compile_matcher(
+    query: str,
+    mode: str = "contains",
+    case_sensitive: bool = False,
+) -> Callable[[str], bool]:
+    """把"怎么算命中"编成一个 ``f(text) -> bool`` —— 给 ``screen.find_text`` 用。
+
+    三种口径:
+
+    * ``contains`` (默认) —— 一段里含这个子串就算。屏幕上认出的字几乎总有噪声
+      (行尾多一个标点、中文被切成词), 精确相等在实际文本上命中率很低。
+    * ``exact`` —— 整段等于它。用于"这一行就是这个词"的场合。
+    * ``regex`` —— ``re.search``。非法正则在这里就炸成 ``bad_request``。
+
+    忽略大小写用 ``casefold()`` 而不是 ``lower()``: 后者对德语 ß / 土耳其语
+    点号这类字符处理得不对, 而 OCR 认出来的文本什么语言都可能有。
+    """
+    mode = str(mode or "contains").lower()
+    if mode not in MATCH_MODES:
+        raise OcrError(
+            "bad_request",
+            f"match 只能是 {' / '.join(MATCH_MODES)}, 收到 {mode!r}",
+        )
+    if mode == "regex":
+        try:
+            pattern = re.compile(query, 0 if case_sensitive else re.IGNORECASE)
+        except re.error as exc:
+            raise OcrError("bad_request", f"query 不是合法正则: {exc}")
+        return lambda text: bool(pattern.search(text or ""))
+    if case_sensitive:
+        if mode == "exact":
+            return lambda text: query == (text or "")
+        return lambda text: query in (text or "")
+    needle = query.casefold()
+    if mode == "exact":
+        return lambda text: needle == (text or "").casefold()
+    return lambda text: needle in (text or "").casefold()

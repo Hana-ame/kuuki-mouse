@@ -727,6 +727,11 @@ NEW_OP_CASES = [
     ("screen.ocr", {}),
     ("screen.ocr", {"include_words": False}),
     ("screen.ocr", {"lang": "zh-Hans-CN"}),
+    # find_text: 命中 / 没命中 (空 repeated 的那条) / 词级 / 正则, 四种形态
+    ("screen.find_text", {"query": "AB"}),
+    ("screen.find_text", {"query": "A", "unit": "word", "all": True}),
+    ("screen.find_text", {"query": "zzz"}),
+    ("screen.find_text", {"query": "^A", "match": "regex", "case_sensitive": True, "limit": 1}),
 ]
 
 
@@ -1020,7 +1025,11 @@ def test_window_list_on_real_desktop():
         assert item["pid"] > 0
         assert set(item["rect"]) == {"left", "top", "width", "height"}
     foreground = window_module.foreground_window()
-    if foreground is not None:
+    # 只在"前台窗口看得见且有标题"时才要求它在列表里: list_windows 默认丢掉不可见
+    # 的 / 被 DWM 隐藏的 / 没标题的窗口, 而前台窗口完全可能是这一类 —— 远程桌面的
+    # 覆盖层窗口 (Parsec 那种) 就报 visible=False, 这时候"前台不在列表里"是正确
+    # 行为, 不是 bug。(踩到过: 那条断言在挂着远程桌面的机器上一直是红的。)
+    if foreground is not None and foreground["visible"] and foreground["title"]:
         assert foreground["hwnd"] in {item["hwnd"] for item in windows}
 
 
@@ -3030,3 +3039,159 @@ def test_ocr_recognizes_generated_image():
     assert "12345" in digits, "数字没认出来: %r" % (result["text"],)
     # 逐词矩形是这一层的原始信息: 有词就得有位置
     assert all(word["w"] > 0 for line in result["lines"] for word in line["words"])
+
+
+# ================================================================ 按文字定位 (find_text)
+#
+# screen.ocr 把整屏的字都给出来, screen.find_text 只回"写着它的那块" —— 含**能直接
+# 点**的中心点。这一层的判据要盯三件事: 中心点是不是屏幕坐标、只回一个时回的是不是
+# 最靠上那个、以及参数有没有回显 (不回显就测不出"某条传输把它丢了")。
+
+
+def test_find_text_matcher_modes():
+    """四种口径: 包含 / 相等 / 正则, 以及忽略大小写。"""
+    from remote import ocr
+
+    contains = ocr.compile_matcher("Send", "contains")
+    assert contains("Send(S)") and contains("Resend") and not contains("Cancel")
+
+    exact = ocr.compile_matcher("Send", "exact")
+    assert exact("Send") and not exact("Send(S)")
+
+    regex = ocr.compile_matcher(r"^\d{3}$", "regex")
+    assert regex("123") and not regex("1234")
+
+    # 默认忽略大小写, 而且用 casefold: 德语 ß 这类字符才不会漏
+    assert ocr.compile_matcher("send")("SEND")
+    assert ocr.compile_matcher("send", "contains", case_sensitive=True)("send")
+    assert not ocr.compile_matcher("send", "contains", case_sensitive=True)("SEND")
+
+
+def test_find_text_matcher_rejects_bad_input():
+    """非法正则与非法口径都要当场炸 —— 否则"没找到"与"参数写错了"分不开。"""
+    from remote import ocr
+
+    with pytest.raises(ocr.OcrError) as exc:
+        ocr.compile_matcher("a(b", "regex")
+    assert exc.value.code == "bad_request"
+    with pytest.raises(ocr.OcrError) as exc:
+        ocr.compile_matcher("x", "fuzzy")
+    assert exc.value.code == "bad_request"
+
+
+def test_screen_find_text_returns_clickable_center(monkeypatch):
+    """中心点必须是**屏幕坐标**上的中点 —— 图坐标的中点差了缩放/裁剪/原点三步。"""
+    stub_ocr(monkeypatch)
+    screen = fake_screen(200, 100)
+    # 单屏机器测不到 origin 那一层平移, 这里假装有块屏摆在主屏左边
+    screen.frame_origin = lambda: (-1920, 0)  # type: ignore[method-assign]
+    service = RemoteService(screen=screen, controller=fake_controller()[0])
+
+    result = service.handle(
+        "screen.find_text", {"query": "AB", "region": [100, 50, 80, 40], "max_width": 40}
+    )
+    assert result["found"] and result["count"] == 1
+    item = result["items"][0]
+    # 图上 (10,8,20,4) -> 屏幕: 10/0.5 + 100 - 1920
+    assert item["screen"] == {"x": -1800, "y": 66, "w": 40, "h": 8}
+    assert item["center"] == {"x": -1780, "y": 70}
+
+
+def test_screen_find_text_word_unit_gives_tighter_box(monkeypatch):
+    """unit=word 只框住那个词, 不是整行。"""
+    stub_ocr(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    line = service.handle("screen.find_text", {"query": "AB"})["items"][0]
+    word = service.handle("screen.find_text", {"query": "A", "unit": "word"})["items"][0]
+    assert line["text"] == "AB" and line["w"] == 20
+    assert word["text"] == "A" and word["w"] == 10
+
+
+def test_screen_find_text_defaults_to_topmost(monkeypatch):
+    """只回一个时回的是**最靠上**的那个, 不是"第一个被认出来的"。
+
+    OCR 给行的顺序不保证是阅读顺序 —— 这里自己按 (y, x) 排一遍, 所以调用方拿到
+    的"那一个"是稳定的 (换台机器、换个语言包, 只要字还在那儿, 结果就该一样)。
+    """
+    from remote import ocr
+
+    monkeypatch.setattr(ocr, "ocr_supported", lambda: True)
+    monkeypatch.setattr(
+        ocr,
+        "recognize",
+        lambda source=None, lang="", timeout=0: {
+            "ok": True,
+            "text": "x",
+            "language": "zh-Hans-CN",
+            "width": 40,
+            "height": 20,
+            "lines": [
+                {"text": "下面", "x": 0, "y": 100, "w": 20, "h": 4, "words": []},
+                {"text": "上面", "x": 0, "y": 20, "w": 20, "h": 4, "words": []},
+            ],
+            "count": 2,
+        },
+    )
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    one = service.handle("screen.find_text", {"query": "面"})
+    assert one["count"] == 1 and one["items"][0]["text"] == "上面"
+    both = service.handle("screen.find_text", {"query": "面", "all": True})
+    assert [item["text"] for item in both["items"]] == ["上面", "下面"]
+    # limit 是在"全部"之上再截断, 且 0 / 没给 = 不限
+    assert len(service.handle("screen.find_text", {"query": "面", "all": True, "limit": 1})["items"]) == 1
+    assert len(service.handle("screen.find_text", {"query": "面", "all": True, "limit": 0})["items"]) == 2
+
+
+def test_screen_find_text_not_found_is_not_an_error(monkeypatch):
+    """屏幕上没有这个字是**正常结果**, 不是调用方的错 —— 用 found 表示, 不抛异常。"""
+    stub_ocr(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    result = service.handle("screen.find_text", {"query": "zzz"})
+    assert result["ok"] and result["found"] is False
+    assert result["count"] == 0
+    # 空列表而不是"不给键": protobuf 的空 repeated 在 MessageToDict 里照样会出现,
+    # 两边必须一致 (test_new_ops_agree_across_transports 会盯这条)
+    assert result["items"] == []
+
+
+def test_screen_find_text_echoes_its_parameters(monkeypatch):
+    """query / match / unit / case_sensitive 都要回显。
+
+    参数不进返回值就测不出"某条传输把它悄悄改了" —— 服务端按默认处理, 一切看起来
+    正常, 只有调用方指定的口径没人理会 (见 protocol-optional-param-needs-echo.md)。
+    """
+    stub_ocr(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    result = service.handle(
+        "screen.find_text",
+        {"query": "AB", "match": "exact", "unit": "word", "case_sensitive": True},
+    )
+    assert result["query"] == "AB"
+    assert result["match"] == "exact"
+    assert result["unit"] == "word"
+    assert result["case_sensitive"] is True
+
+
+def test_screen_find_text_rejects_bad_args(monkeypatch):
+    stub_ocr(monkeypatch)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    for args in (
+        {},                                       # 没给 query
+        {"query": "   "},                         # 给的 query 是空白
+        {"query": "x", "match": "fuzzy"},         # 口径不存在
+        {"query": "x", "unit": "char"},           # 粒度不存在
+        {"query": "a(", "match": "regex"},        # 正则写错
+    ):
+        with pytest.raises(RemoteError) as exc:
+            service.handle("screen.find_text", args)
+        assert exc.value.code == "bad_request", args
+
+
+def test_screen_find_text_reports_unsupported_when_not_windows(monkeypatch):
+    from remote import ocr
+
+    monkeypatch.setattr(ocr, "ocr_supported", lambda: False)
+    service = RemoteService(screen=fake_screen(), controller=fake_controller()[0])
+    with pytest.raises(RemoteError) as exc:
+        service.handle("screen.find_text", {"query": "x"})
+    assert exc.value.code == "unsupported"

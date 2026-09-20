@@ -424,6 +424,25 @@ PNG 魔数正确; region 裁剪 + `max_width` 缩放 (320x200 区域 → 160x100
 - 不设 token 时**任何能连到该端口的本机进程都能控制你的鼠标键盘并读屏**。
 - 要暴露到网络必须 `--allow-remote --token <强随机值>`, 且建议再套一层 SSH 隧道 / 反向代理。
 - gRPC 用的是 `insecure_channel` (明文), token 只是防误连, 不是加密; 跨机请走隧道。
+- **"只绑回环"挡不住 PeerJS 这条进来的路。** WS / gRPC 是本机*监听*, 绑回环就只有
+  本机进程能连; PeerJS 反过来 —— 是本机*主动连出去*注册到公开 broker, 别人拿到房间码
+  `kuuki-mouse-XXXXX` 就能从任何地方连进来, 与 `--host` 无关。房间码 31⁵ ≈ 2860 万种,
+  够挡误撞, 挡不住有意枚举。没设 token 就等于**任何知道房间码的人有完全控制权**,
+  只在可信网络里这么用 (手机自配对通常是可信的), 不确定就加 `--token`。
+
+## 9.1 打包产物 (受控端 exe)
+
+CI 每次推 `master` / `feat/remote-control` 都会在 windows-latest 上打一次, 但**只打
+受控端** —— 控制端 (`remote.ctl` / `remote.client`) 一直在开发环境跑源码, 不进包。
+
+- 普通推送: 仓库 → **Actions** → 点最新的 `Build kuuki-agent` → 底部 **Artifacts**
+  里下 `kuuki-agent-windows-x64.zip` (保留 14 天)
+- 发版本: `git tag v0.1.0 && git push origin v0.1.0` —— 自动建 Release 并把 zip 挂上去
+- 自己打: `pip install -r requirements.txt -r requirements-remote.txt -r requirements-build.txt`
+  然后 `pyinstaller packaging/kuuki-agent.spec --noconfirm`, 产物在 `dist/kuuki-agent/`
+
+产物是 onedir (不是单文件): aiortc / av 有一堆 DLL, 单文件每次启动都要解上百 MB。
+zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstaller-ci.md`。
 
 ## 10. 测试与验证状态
 

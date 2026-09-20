@@ -316,8 +316,19 @@ class RemoteService:
         interval = _as_float(args.get("interval"), "interval", 0.05)
         # hold 默认 60ms: 瞬时 down/up 会被某些前端框架当成无效点击
         hold = _as_float(args.get("hold"), "hold", 0.06)
-        done = self.controller.click(button, clicks, interval, hold)
-        return {"button": button, "clicks": done, "hold": hold}
+        # x / y 可选: 先定位再点。缺省表示点当前位置。以前这里两个参数被忽略了,
+        # 传 {"x":..,"y":..} 会静默点在当前光标处 (后来才发现的 bug, 见
+        # docs/knowledge/protocol-mouse-click-ignores-xy.md)。
+        x = args.get("x")
+        y = args.get("y")
+        x = _as_int(x, "x") if x is not None else None
+        y = _as_int(y, "y") if y is not None else None
+        move_duration = _as_float(args.get("move_duration"), "move_duration", 0.0)
+        done = self.controller.click(button, clicks, interval, hold, x, y, move_duration)
+        result = {"button": button, "clicks": done, "hold": hold}
+        if x is not None or y is not None:
+            result["positioned_at"] = {"x": x, "y": y}
+        return result
 
     def _op_mouse_down(self, args: dict) -> dict:
         button = _as_str(args.get("button"), "button", "left")

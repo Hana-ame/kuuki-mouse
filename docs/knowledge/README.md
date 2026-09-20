@@ -21,8 +21,10 @@
 - [拖拽路径全程只按一次、只松一次](protocol-drag-single-press-release.md)
 - [gRPC 无返回值的 RPC 用 `Ack{ok, message}` 兜底](protocol-grpc-ack-unwrap.md)
 - [组合键要在客户端拆，不能在服务端拆](protocol-grpc-hotkey-split.md)
+- [同一份数据的 JSON 通道与二进制帧头必须字段一致](protocol-json-binary-field-parity.md)
+- [空格 / 制表符是合法键名，不能先 strip 再判空](protocol-key-whitespace.md)
 - [`MessageToDict` 会省略取默认值的字段](protocol-messagetodict-defaults.md)
-- [【未修】`mouse.click` 静默忽略 `x` / `y`](protocol-mouse-click-ignores-xy.md)
+- [【已修】`mouse.click` 静默忽略 `x` / `y`](protocol-mouse-click-ignores-xy.md)
 - [proto3 普通标量分不清「显式给 0」与「缺省」](protocol-proto3-optional.md)
 - [多步滚动要保持总量守恒](protocol-scroll-total-conservation.md)
 - [「0 是合法值」的字段不能用 `x or default`](protocol-zero-is-valid-value.md)
@@ -115,4 +117,4 @@
 
 ---
 
-共 **54 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **56 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

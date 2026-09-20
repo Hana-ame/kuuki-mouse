@@ -135,10 +135,16 @@ def resolve_key(name: str):
     """
     if name is None:
         raise ValueError("键名不能为空")
-    raw = str(name).strip()
-    if not raw:
+    raw = str(name)
+    # 先把纯空白字符挑出来: 空格/制表符/换行本身就是有意义的键, 但它们 strip 之后
+    # 会变成空串 —— 不先认下来就会被下面当成"没给键名"误拒 (实测: 控制端发
+    # {"key": " "} 想敲一个空格, 服务端回 "键名不能为空")。
+    if raw.strip():
+        key = raw.strip().lower()
+    else:
+        key = {" ": "space", "\t": "tab", "\n": "enter", "\r": "enter"}.get(raw, "")
+    if not key:
         raise ValueError("键名不能为空")
-    key = raw.lower()
     key = KEY_ALIASES.get(key, key)
     if key in _SPECIAL:
         return _SPECIAL[key]
@@ -159,11 +165,94 @@ _CLIPBOARD_CANDIDATES = (
 
 
 def clipboard_tool() -> Optional[Tuple[str, List[str]]]:
-    """探测可用的剪贴板写入工具, 返回 (名字, 命令前缀) 或 None。"""
+    """探测可用的剪贴板**命令行**写入工具, 返回 (名字, 命令前缀) 或 None。
+
+    注意: Windows 上有更好的写法——直接用 Win32 API (见
+    :func:`_set_clipboard_windows`)。这里保留 ``clip`` 只是作为**兜底**:
+    它是外部进程, 会引发下面这个函数文档里说的编码问题。
+    """
     for name, cmd, _kind in _CLIPBOARD_CANDIDATES:
         if shutil.which(name):
             return name, list(cmd)
     return None
+
+
+def _set_clipboard_windows(text: str, retries: int = 10, delay: float = 0.05) -> bool:
+    """用 Win32 API 直接写 ``CF_UNICODETEXT``, 成功返回 True。
+
+    为什么绕开 ``clip.exe``
+    ----------------------
+    ``clip`` 按**控制台当前代码页**解释 stdin 的字节。中文 Windows 的活动代码页
+    是 936 (GBK), 于是任何 UTF-8 输入都会被当成 GBK: 一个三字节的汉字会被拆成
+    一个半 GBK 字, 粘出来就是 "浣犲ソ" 这类乱码 (实测: ``keyboard.paste``
+    发 "你好kuuki" 得到 "浣犲ソkuuki")。这件事从外部很难救 —— 换 whatever code
+    page 会污染整个会话, 而且不一定装了 UTF-8 代码页。
+
+    直接调 ``SetClipboardData(CF_UNICODETEXT, ...)`` 写 UTF-16LE 就完全没有这条
+    路径: 剪贴板原生就是 Unicode 格式, 粘贴端读到的就是原字。
+
+    ``retries`` 是因为剪贴板是全局独占的: 别的进程 (远程桌面 rdpclip、别的复制
+    操作) 可能正开着它, ``OpenClipboard`` 会失败。重试几次通常就让开了。
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except Exception:  # pragma: no cover - Windows 上必有 ctypes
+        return False
+
+    CF_UNICODETEXT = 13
+    GMEM_MOVEABLE = 0x0002
+
+    try:
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    except Exception:  # pragma: no cover - 非 Windows 不会走到这里
+        return False
+
+    user32.OpenClipboard.argtypes = (wintypes.HWND,)
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = (wintypes.UINT, wintypes.HANDLE)
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalAlloc.argtypes = (wintypes.UINT, ctypes.c_size_t)
+    kernel32.GlobalAlloc.restype = wintypes.HANDLE
+    kernel32.GlobalFree.argtypes = (wintypes.HANDLE,)
+    kernel32.GlobalFree.restype = wintypes.HANDLE
+    kernel32.GlobalLock.argtypes = (wintypes.HANDLE,)
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = (wintypes.HANDLE,)
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+    # CF_UNICODETEXT 要求 NUL 结尾的 UTF-16LE; 末尾补一对 0 字节保证有终止符。
+    encoded = str(text).encode("utf-16-le") + b"\x00\x00"
+
+    for attempt in range(max(1, int(retries))):
+        if not user32.OpenClipboard(None):
+            time.sleep(delay)
+            continue
+        try:
+            handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(encoded))
+            if not handle:
+                return False
+            locked = kernel32.GlobalLock(handle)
+            if not locked:
+                kernel32.GlobalFree(handle)
+                return False
+            try:
+                ctypes.memmove(locked, encoded, len(encoded))
+            finally:
+                kernel32.GlobalUnlock(handle)
+            # 顺序不能反: EmptyClipboard 必须在 SetClipboardData 之前,
+            # 之后这块内存归系统所有 —— 不要再 GlobalFree, 否则会双重释放。
+            if not user32.EmptyClipboard():
+                return False
+            if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+                return False
+            return True
+        finally:
+            user32.CloseClipboard()
+    return False
 
 
 # ---------------------------------------------------------------- 控制器
@@ -314,6 +403,9 @@ class InputController(PynputMouseController):
         clicks: int = 1,
         interval: float = 0.05,
         hold: float = 0.06,
+        x: Optional[int] = None,
+        y: Optional[int] = None,
+        move_duration: float = 0.0,
     ) -> int:
         """点击。``hold`` 是按下与抬起之间的间隔, 默认 60ms。
 
@@ -322,7 +414,18 @@ class InputController(PynputMouseController):
         实测 DSH Web GUI 的发送按钮: 光标位置经读回确认到位、调用返回成功,
         但按钮毫无反应、消息发不出去。这与 ``remote/win/winhost.ps1`` 里
         ``mouse_event`` 瞬时连击是同一个坑, 两处行为保持一致。
+
+        ``x`` / ``y`` 给了就**先移动再点**, 只给一个时另一个保持当前坐标
+        (与 :meth:`scroll` 一致)。这一步不能省: 移动是鼠标的全局状态, 不挪过去
+        就等于点当前位置 —— 也就是"传了坐标但点了别处"。
         """
+        if x is not None or y is not None:
+            current_x, current_y = self.position()
+            self.move_smooth(
+                current_x if x is None else int(x),
+                current_y if y is None else int(y),
+                move_duration,
+            )
         btn = self._button(button)
         total = max(1, int(clicks))
         for i in range(total):
@@ -591,19 +694,22 @@ class InputController(PynputMouseController):
     # ---------------- 剪贴板粘贴 ----------------
     def paste_text(self, text: str) -> dict:
         """把文本写进剪贴板并发粘贴快捷键 (中文/emoji 的可靠输入方式)。"""
-        tool = clipboard_tool()
-        if tool is None:
-            raise RuntimeError(
-                "没有可用的剪贴板工具 (需要 wl-copy / xclip / xsel / pbcopy / clip 之一)"
-            )
-        name, cmd = tool
-        proc = subprocess.run(cmd, input=str(text).encode("utf-8"), capture_output=True)
-        if proc.returncode != 0:
-            raise RuntimeError(
-                f"{name} 写入剪贴板失败: {proc.stderr.decode('utf-8', 'replace')[:200]}"
-            )
+        text = "" if text is None else str(text)
+        name = "win32"
+        if not (sys.platform == "win32" and _set_clipboard_windows(text)):
+            tool = clipboard_tool()
+            if tool is None:
+                raise RuntimeError(
+                    "写不了剪贴板 (既没有 Win32 API, 也没有 wl-copy / xclip / xsel / pbcopy / clip)"
+                )
+            name, cmd = tool
+            proc = subprocess.run(cmd, input=text.encode("utf-8"), capture_output=True)
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"{name} 写入剪贴板失败: {proc.stderr.decode('utf-8', 'replace')[:200]}"
+                )
         time.sleep(0.05)
         # 不再维护: macOS 分支。受控端只支持 Windows, 这里恒定走 ctrl+v。
         paste_key = "cmd+v" if sys.platform == "darwin" else "ctrl+v"
         self.hotkey(paste_key)
-        return {"chars": len(str(text)), "clipboard_tool": name, "hotkey": paste_key}
+        return {"chars": len(text), "clipboard_tool": name, "hotkey": paste_key}

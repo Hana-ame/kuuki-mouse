@@ -114,6 +114,9 @@ class Capture:
             "duration_ms": round(self.duration_ms, 2),
             "bytes": self.bytes,
             "cursor": self.cursor,
+            # 必须在这里: JSON 通道 (screen.screenshot) 与二进制帧头都走这个方法,
+            # 以前漏了它, 于是同一帧走 op 拿不到 backend、走二进制才拿得到。
+            "backend": self.backend,
         }
         if image_b64 is not None:
             out["image_b64"] = image_b64

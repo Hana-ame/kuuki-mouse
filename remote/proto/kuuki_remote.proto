@@ -107,6 +107,11 @@ message ClickMouseRequest {
   string button = 1;       // left / middle / right
   int32 clicks = 2;        // 默认 1
   double interval = 3;     // 连击间隔 (秒)
+  // 可选: 先把光标移到这里再点。与 ScrollRequest 的 at_x / at_y 一个道理 ——
+  // 用 optional 是为了能只给其中一个 (另一个保持当前坐标), 也为了区分
+  // 「没给」与「显式给 0」(原点是个合法坐标)。
+  optional int32 at_x = 4;
+  optional int32 at_y = 5;
 }
 
 message MouseButtonRequest {

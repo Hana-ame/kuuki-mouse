@@ -48,7 +48,7 @@ controller (本机)
 | `mouse.position` | 读光标 | — |
 | `mouse.move` | 绝对移动（可平滑） | x, y, duration |
 | `mouse.move_rel` | 相对移动 | dx, dy, duration |
-| `mouse.click` | 单击/双击/右键，hold 默认 60ms | button, clicks, interval, hold |
+| `mouse.click` | 单击/双击/右键，hold 默认 60ms；x/y 先移动再点 | button, clicks, interval, hold, x?, y? |
 | `mouse.down` / `mouse.up` | 按住/松开 | button |
 | `mouse.scroll` | 滚轮；**steps>1 平滑多步**，**x/y 先定位再滚** | dx, dy, steps=1, interval=0.05, x?, y? |
 | `mouse.scroll_h` | 横向滚动（`dx` 为主体） | dx, dy=0, steps, interval |

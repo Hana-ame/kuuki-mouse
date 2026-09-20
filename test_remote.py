@@ -99,6 +99,19 @@ def test_resolve_key_chars_and_errors():
         resolve_key("")
 
 
+def test_resolve_key_whitespace_is_a_real_key():
+    """空格/制表符是有意义的键, 不能被 strip 成空串后当成"没给键名"。
+
+    实测: 控制端发 ``{"key": " "}`` 想敲一个空格, 服务端回 "键名不能为空"。
+    """
+    from pynput.keyboard import Key
+
+    assert resolve_key(" ") is Key.space
+    assert resolve_key("\t") is Key.tab
+    assert resolve_key("\n") is Key.enter
+    assert resolve_key("space") is Key.space
+
+
 # ================================================================ 区域
 
 
@@ -137,6 +150,10 @@ def test_capture_reports_its_backend():
     """
     capture, _ = _capture(fake_screen(), {"format": "png"})
     assert capture.backend == "pillow"
+
+    # 同一帧走 JSON 通道 (screen.screenshot) 也必须带上它 —— 以前 to_dict 漏了,
+    # 于是「走 op 拿不到 backend、走二进制帧才拿得到」, 同一个字段两个答案。
+    assert capture.to_dict()["backend"] == "pillow"
 
 
 def test_capture_region_scale_and_limits():
@@ -524,6 +541,98 @@ def test_combo_hold_ms_and_hold_key():
         controller.hold_key("f2", 0)
 
 
+def test_click_with_xy_moves_first():
+    """``mouse.click`` 给了 x/y 必须**先移动再点**。
+
+    这是 2026-09-20 修掉的真 bug: 以前 x/y 被静默忽略, 服务端回 ok 但点的是当前
+    光标位置 —— 控制端隔着屏幕看不出来, 只会以为"点了没反应"。
+    """
+    controller, mouse, _ = fake_controller()
+
+    result = service_result(controller, "mouse.click", {"x": 640, "y": 480})
+    assert result["positioned_at"] == {"x": 640, "y": 480}
+    assert mouse.positions[-1] == (640, 480), "点击前必须真的把光标挪过去"
+    assert (mouse.presses, mouse.releases) == (1, 1)
+
+
+def test_click_without_xy_stays_put():
+    """没给坐标时保持当前位置 —— 不能因为加了定位就把光标拉回某个默认值。"""
+    controller, mouse, _ = fake_controller()
+    mouse.positions.clear()
+
+    result = service_result(controller, "mouse.click", {})
+    assert "positioned_at" not in result, "没给坐标时不该伪造一个 position"
+    assert mouse.positions == [], "不得移动光标"
+    assert mouse.presses == 1
+
+
+def test_click_only_x_keeps_current_y():
+    """只给 x 时 y 保持当前坐标 —— 与 scroll 的行为保持一致。"""
+    controller, mouse, _ = fake_controller(start=(111, 222))
+    service_result(controller, "mouse.click", {"x": 55})
+    assert mouse.positions[-1] == (55, 222)
+
+
+def service_result(controller, op, args):
+    """用假件跑一个 op, 返回 service 的返回值。"""
+    from remote.service import RemoteService
+
+    service = RemoteService(screen=fake_screen(), controller=controller)
+    return service.handle(op, args)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 剪贴板 API")
+def test_win32_clipboard_roundtrip_keeps_cjk():
+    """写进 Windows 剪贴板的中文必须原样读回。
+
+    ``clip.exe`` 做不到的正是这件事 (它按 GBK 解释 stdin, "你好" 会变成
+    "浣犲ソ")。这里用 Win32 API 直接写 CF_UNICODETEXT, 应当无损。
+
+    会把调用方的剪贴板占一下, 所以测试结束前**把原文放回去**。
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    from remote.input import _set_clipboard_windows
+
+    CF_UNICODETEXT = 13
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetClipboardData.argtypes = (wintypes.UINT,)
+    user32.GetClipboardData.restype = wintypes.HANDLE
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GlobalLock.argtypes = (wintypes.HANDLE,)
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = (wintypes.HANDLE,)
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+    def read_clipboard():
+        if not user32.OpenClipboard(None):
+            return None
+        try:
+            handle = user32.GetClipboardData(CF_UNICODETEXT)
+            if not handle:
+                return None
+            locked = kernel32.GlobalLock(handle)
+            if not locked:
+                return None
+            try:
+                text = ctypes.wstring_at(locked)
+            finally:
+                kernel32.GlobalUnlock(handle)
+            return text
+        finally:
+            user32.CloseClipboard()
+
+    original = read_clipboard()
+    try:
+        sample = "你好 kuuki 🎉 café"
+        assert _set_clipboard_windows(sample) is True
+        assert read_clipboard() == sample
+    finally:
+        if original is not None:
+            _set_clipboard_windows(original)
+
+
 def test_parse_points_accepts_two_forms():
     from remote.service import parse_points
 
@@ -585,6 +694,12 @@ def test_service_rejects_bad_new_op_args():
 
 
 NEW_OP_CASES = [
+    # click 带坐标要同时在返回值与副作用上一致 —— gRPC 侧必须把 at_x/at_y 真的
+    # 传下去 (直接塞 0 会把"没给坐标"变成"定位到左上角")
+    ("mouse.click", {"x": 640, "y": 480, "interval": 0}),
+    ("mouse.click", {"x": 111, "interval": 0}),
+    ("mouse.click", {"y": 222, "interval": 0}),
+    ("mouse.click", {"interval": 0}),
     ("mouse.scroll", {"dy": 7, "steps": 3, "interval": 0}),
     ("mouse.scroll", {"dy": 2, "x": 111}),
     ("mouse.scroll", {"dy": 2, "y": 222}),

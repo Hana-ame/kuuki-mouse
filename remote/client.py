@@ -307,6 +307,7 @@ class GrpcClient:
                     button=args.get("button", "left"),
                     clicks=int(args.get("clicks", 1) or 1),
                     interval=float(args.get("interval", 0.05) or 0.05),
+                    **_optional_at(args),
                 ),
                 **self._kwargs(),
             ),
@@ -494,6 +495,21 @@ def _shot_args(args: argparse.Namespace) -> dict:
         out["draw_cursor"] = True
     if args.region:
         out["region"] = [int(v) for v in args.region.split(",")]
+    return out
+
+
+def _optional_at(args: dict) -> dict:
+    """取出 args 里"想先定位再操作"的坐标, 转成 proto 的 optional 字段 kwargs。
+
+    为什么不能直接塞 0: ``at_x`` / ``at_y`` 是 ``optional``, 给了才写入; 直接
+    ``at_x=args.get("x", 0)`` 会把"没给坐标"变成"定位到 x=0", 点在屏幕左上角。
+    显式传 0 反而是合法的 —— 所以它必须真的进被调(req.HasField() 要 True)。
+    """
+    out: Dict[str, int] = {}
+    if args.get("x") is not None:
+        out["at_x"] = int(args["x"])
+    if args.get("y") is not None:
+        out["at_y"] = int(args["y"])
     return out
 
 

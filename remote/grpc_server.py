@@ -228,14 +228,18 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
     def ClickMouse(self, request, context):
         self._check_auth(context)
         with _translate(context):
-            result = self.service.handle(
-                "mouse.click",
-                {
-                    "button": request.button or "left",
-                    "clicks": int(request.clicks) or 1,
-                    "interval": request.interval or 0.05,
-                },
-            )
+            payload = {
+                "button": request.button or "left",
+                "clicks": int(request.clicks) or 1,
+                "interval": request.interval or 0.05,
+            }
+            # at_x / at_y 是 optional: 只在显式给了时才传下去, 让"原点也可以是
+            # 目标"这件事在 gRPC 侧与 WS 侧一致 (鼠标 click 的坐标语义: 先移动再点)
+            if request.HasField("at_x"):
+                payload["x"] = int(request.at_x)
+            if request.HasField("at_y"):
+                payload["y"] = int(request.at_y)
+            result = self.service.handle("mouse.click", payload)
         return pb.Ack(ok=True, message=json.dumps(result, ensure_ascii=False))
 
     def MouseDown(self, request, context):

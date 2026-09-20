@@ -4,9 +4,14 @@
 
 | 位置 | 问题 | 详见 |
 |---|---|---|
-| `remote/service.py:313` | `mouse.click` **静默忽略 `x`/`y`**，只点当前光标位置 | `protocol-mouse-click-ignores-xy.md` |
 | proto `ClickMouseRequest` | `interval` 是普通标量，分不清显式 0 与缺省 | `protocol-proto3-optional.md` |
 | proto `ClickMouseRequest` | **没有 `hold` 字段** —— WS 支持 `hold`、gRPC 不支持 | — |
+
+> 2026-09-20 已修掉：`mouse.click` 静默忽略 `x`/`y`（见
+> `protocol-mouse-click-ignores-xy.md`）、`keyboard.paste` 中文经 `clip.exe`
+> 变 GBK 乱码（见 `gui-chinese-input-via-clipboard.md`）、`{"key": " "}` 空格
+> 被 strip 成空串后误报"键名不能为空"（见 `protocol-key-whitespace.md`）、
+> `Capture.to_dict()` 漏 `backend` 字段（JSON 通道与二进制帧头不一致）。
 
 ## 未做的验证
 

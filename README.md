@@ -268,6 +268,8 @@ start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机, P1-P3/P6 已落地)
 docs/ctl-selfhost-runbook.md  控制端实战手册: 实测记录 / 注意事项 / 一步步复现本机自控
 check_ctl_docs.py             校验文档代码块里的 ctl 命令是否还被 parser 认得 (防文档过期)
+gen_knowledge_index.py        重生成 docs/knowledge/README.md 索引 (新增知识点后用真 parser 不需要, 跑它即可)
+docs/knowledge/               **踩坑与注意事项, 一个文件一个知识点 (54 条), 见 docs/knowledge/README.md**
 
 # ---- 调试 / 演示小工具 ----
 annotate.py      截图上叠坐标网格 + 标记目标点/色块, 核对"算出的坐标偏没偏"

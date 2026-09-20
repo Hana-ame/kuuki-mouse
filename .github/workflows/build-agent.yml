@@ -181,6 +181,16 @@ jobs:
           test -s ws_shot.png
           test -s grpc_shot.png
 
+          # 多显示器那一路也要在打包后的 exe 上跑通: monitors 枚举 (ctypes) 与
+          # "抓第 0 块屏" 都是新增代码路径, 源码侧有单元测试 (打桩), 这里验的是
+          # 打进 exe 之后 EnumDisplayMonitors 还调得动。
+          python -m remote.client ws --url ws://127.0.0.1:18765 \
+            op screen.monitors --args '{}' | tee monitors.json
+          grep -q '"count"' monitors.json
+          python -m remote.client ws --url ws://127.0.0.1:18765 screenshot ws_monitor0.png --monitor 0
+          ls -l ws_monitor0.png
+          test -s ws_monitor0.png
+
           # 手机端 (web/) 走的是 kuuki 老协议透传, 不是 op 封装 —— 这条才是用户
           # 扫码后真正在用的路。它要 `from app import handle_message`, 而 app.py
           # 顶层就 `app = App()` (含 pynput 控制器), 打进 exe 后能不能起来没人验过。

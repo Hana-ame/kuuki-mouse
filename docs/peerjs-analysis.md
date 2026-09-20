@@ -18,7 +18,7 @@
 [未验证]         跨 NAT（本机只有一台）、弱网/移动网下的重连、远端真实屏幕与输入
 ```
 
-"回环"那一行不是靠读代码下的结论：`test_remote.py` 里有 13 项测试，用一个内存回环把
+"回环"那一行不是靠读代码下的结论：`test_remote.py` 里有 16 项 PeerJS 相关测试，用一个内存回环把
 `PeerJsServer` 与 `PeerJsClient` 背靠背接起来，跑的是**和真机完全相同的代码路径**，
 只是把 `DataConnection.send()` 换成了一次函数调用。连 `remote.ctl` 的 peerjs 分支都是
 这么验的 —— ctl 自己不知道，它照常走 registry → 目标解析 → 分发 → 汇总 → 状态回填。

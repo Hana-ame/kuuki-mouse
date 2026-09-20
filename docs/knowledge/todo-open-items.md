@@ -27,6 +27,26 @@
 - 弱网 / 重连：现在的行为是超时后标 offline，**不重试**
 - 分发相关：**代码签名**（SmartScreen 会拦未签名 exe）、**体积精简**（av 编解码器没挑过）
 
+## 三传输其实不等价 —— 2026-09-20 全 op 核对的结果
+
+仓库的约定是「一份实现、三种传输」，但逐一比对时发现**有三类 op 在某个传输上根本没有**:
+
+| op / 能力 | WS | gRPC | PeerJS |
+|---|---|---|---|
+| `notify`（别名 `popup`，`remote/toast.py` 角标通知） | ✅ | ❌ **没有对应 RPC** | ✅ |
+| `screen.grab` / `screen.watch` / `screen.unwatch` | ✅ | ❌（推流走 `StreamScreenshots` 服务端流式，不是 op） | ❌ |
+| `mouse.click` 的 `hold` 参数 | ✅ | ❌ proto 里没这个字段 | ✅ |
+
+根因都一样：`ws_server` / `peerjs_server` 是把 op 名**直接透传给** `service.handle`，
+而 `grpc_server` 是**一张 op→RPC 的手写映射表** —— 表上没写的就用不了。所以「加了新 op
+两个翻译层都要跟」这条约定（《为自己写》见 `arch-one-impl-three-transports.md`）目前只对
+鼠标键盘那部分成立。
+
+**加完 op 要动的四处**：`service.py` 的 handlers/aliases → proto + 重新
+`bash remote/proto/gen_proto.sh` → `grpc_server.py` 的映射 → `client.py` 的构造。
+少一处就静默少一条传输，跑
+`test_remote.py::test_new_ops_agree_across_transports` 也发现不了 —— 它只测表里已有的 op。
+
 ## 小瑕疵
 
 - 文档里客户端示例仍是 `/tmp/shot.png`、`/tmp/frames` 这类 Linux 风格路径

@@ -79,7 +79,7 @@
 - [改行为时先 grep 正文的断言句，别只改代码块](docs-change-prose-not-only-code-blocks.md)
 - [文档命令：parser 通过 ≠ 运行期能跑](docs-endpoint-format-unchecked.md)
 - [照 README 逐条真跑一遍，比单元测试有用](docs-run-readme-end-to-end.md)
-- [文档里的测试数量，是「文档有没有跟着代码走」的指示剂](docs-test-count-as-canary.md)
+- [文档里的静态数字，是「文档有没有跟着代码走」的指示剂](docs-test-count-as-canary.md)
 - [用真 parser 校验文档里的命令](docs-validate-commands-with-parser.md)
 
 ## Web 前端 / Pages

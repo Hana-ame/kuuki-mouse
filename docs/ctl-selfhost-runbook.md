@@ -13,9 +13,9 @@
 | 和 `remote.client` 的区别 | `remote.client` 是**单机调试级**（地址写在命令行上，一条命令打一个 op）；`remote.ctl` 是**多机控制级**。两者不重叠，别搞混 |
 | registry 在哪 | `~/.kuuki/registry.json`（环境变量 `KUUKI_REGISTRY` 或 `--registry` 可改） |
 | 退出码 | `0` 全成功 / `1` 有机器执行失败 / `2` 用法错误（未知别名、未知组、坏 JSON）/ `130` Ctrl-C |
-| 测试基线 | `python -m pytest test_remote.py -q` → **84 passed / 1 skipped**（跳过的是 Linux-X11 专用键预检） |
+| 测试基线 | `python -m pytest test_remote.py -q` → **126 passed / 1 skipped**（跳过的是 Linux-X11 专用键预检） |
 | 已实测 | WS + gRPC 本机自控：ping / info / 光标 / 键预检 / 截屏 / 连续抓帧 / 零位移输入 |
-| 已实测 | PeerJS：回环 13 项 + 真机自检 `python -m remote.peerjs_selftest`（连公开 broker，192KB 截图分块传送逐字节相同）→ 见 `docs/peerjs-analysis.md` |
+| 已实测 | PeerJS：回环 16 项 + 真机自检 `python -m remote.peerjs_selftest`（连公开 broker，192KB 截图分块传送逐字节相同）→ 见 `docs/peerjs-analysis.md` |
 | 未实测 | 跨 NAT 的 PeerJS（本机只有一台）、真多机（本机只有一台） |
 
 ---
@@ -61,7 +61,7 @@
 | 命令 | 实测结果 |
 |---|---|
 | `ping -a` | 两台 OK，约 93ms / 181ms，返回值字段一致（`pong/ts/uptime_s/version`） |
-| `info -a` | 返回 `DESKTOP-LLULJ2Q` / Windows / 1680×1050 / `clipboard_tool: clip` / 43 条 capabilities |
+| `info -a` | 返回 `DESKTOP-LLULJ2Q` / Windows / 1680×1050 / `clipboard_tool: clip` / 46 条 capabilities |
 | `pos -g local` | 两台都读到同一根真实光标 `(1046, 551)` |
 | `check -g local ctrl shift f5` | 三条全 `supported: true` |
 | `shot shot.png -a` | 两张 ~149 KB PNG，自动改名 `shot-self.png` / `shot-self-grpc.png` |
@@ -350,7 +350,7 @@ wait
 
 ### 对应的测试
 
-`test_remote.py` 里 13 项（合计 113 passed / 1 skipped），全部不碰真实光标：
+`test_remote.py` 里 9 项（合计 126 passed / 1 skipped），全部不碰真实光标：
 
 | 测试 | 验的是什么 |
 |---|---|
@@ -415,13 +415,17 @@ FAIL dead          1503.9ms  TimeoutError: 超过 1.5s 未响应
 ### Step 7 · 跑测试 + 校验文档命令
 
 ```bash
-$PY -m pytest test_remote.py -q        # 期望: 57 passed, 1 skipped
-$PY check_ctl_docs.py                  # 期望: 51/51 条文档命令通过 parser
+$PY -m pytest test_remote.py -q        # 期望: 126 passed, 1 skipped
+$PY check_ctl_docs.py                  # 期望: 126/126 条文档命令通过 parser
 ```
 
-`check_ctl_docs.py` 把 README / docs 里**代码块中**的每条 `remote.ctl` 命令喂给真正的 parser —— 命令一改而文档没跟上，这里会直接失败。它只扫代码块，因为正文里有「这样写是错的」这类反例。
+`check_ctl_docs.py` 把 README / docs 里**代码块中**的每条命令喂给真正的 parser ——
+四个 CLI 全覆盖（`remote` / `remote.ctl` / `remote.client` / `remote.dummy`），
+命令一改而文档没跟上，这里会直接失败。它只扫代码块，因为正文里有「这样写是错的」
+这类反例。
 
-ctl 的 15 项测试全部不联网；其中 `test_ctl_end_to_end_over_ws` 会起一个**随机端口**的真 WS 服务端跑完整链路（假屏幕 + 假输入），端口必须在**协程内**取——`asyncio.run` 结束后取值会得到 WinError 10038「非套接字」。
+ctl 的 14 项测试（含参数化共 29 条用例）全部不联网；其中 `test_ctl_end_to_end_over_ws`
+会起一个**随机端口**的真 WS 服务端跑完整链路（假屏幕 + 假输入），端口必须在**协程内**取——`asyncio.run` 结束后取值会得到 WinError 10038「非套接字」。
 
 ### Step 8 · 收尾
 
@@ -472,8 +476,8 @@ registry（`C:\Users\lumin\.kuuki\registry.json`）里留着 `self` / `self-grpc
 | `docs/puppet-multi-machine.md` | 多机方案总纲（第 4 节控制端命令表，第 9 节踩过的坑） |
 | `remote/README.md` | remote 扩展完整文档（3.1 单机调试级 `remote.client`，3.2 多机控制级 `remote.ctl`） |
 | `remote/ctl.py` | 控制端实现，命令 → op 的翻译集中在 `_machine_op()` |
-| `test_remote.py` | 113 项测试，含控制端与 PeerJS 的端到端用例 |
+| `test_remote.py` | 126 项测试，含控制端与 PeerJS 的端到端用例 |
 | `remote/peerjs_selftest.py` | PeerJS 真机自检（连公开 broker，假屏幕假输入） |
-| `check_ctl_docs.py` | 校验文档代码块中的命令是否还被 parser 认得 |
+| `check_ctl_docs.py` | 校验文档代码块中的命令是否还被 parser 认得（四个 CLI 全覆盖） |
 
 > 建议把 `python check_ctl_docs.py` 和 `python -m pytest test_remote.py -q` 一起当作改完 ctl 的收尾动作 —— 这条复现指南就是这么维持不烂的。

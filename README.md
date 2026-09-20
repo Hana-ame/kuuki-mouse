@@ -248,6 +248,7 @@ test_attitude.py 姿态解算单元测试 (port of verify-attitude.mjs)
 remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键盘 + 截屏, WS / gRPC / PeerJS 三传输)
   ├─ __main__.py   服务端入口 + 平台门禁 (非 Windows 拒绝启动, 退出码 2)
   ├─ screen.py     截屏 (单一后端 PIL.ImageGrab) + 裁剪/缩放/编码
+  ├─ vision.py     视觉定位 (纯 Pillow: 颜色找块/模板匹配/帧差/网格概览/主色)
   ├─ input.py      输入控制 (扩展 controller.PynputMouseController)
   ├─ service.py    操作注册表 (op 调度, 三个传输共用)
   ├─ ws_server.py  WebSocket 服务端 (JSON + 二进制截屏帧 + 推流 + 鉴权)
@@ -256,20 +257,20 @@ remote/          本机远程控制扩展 (**受控端仅 Windows**, 鼠标键�
   ├─ ice.py        ICE 候选地址过滤 (自动排掉虚拟网卡)
   ├─ toast.py      被控端无焦点角标通知 (notify op)
   ├─ win/          WSL→Windows 实验桥 (host.py + winhost.ps1, 未接入服务端)
-  ├─ client.py     命令行客户端 (单机调试级: 一条命令打一台一个 op)
+  ├─ client.py     命令行客户端 (单机调试级: 一条命令打一台一个 op + locate 视觉定位)
   ├─ ctl.py        多机控制端 (别名/组/广播 + 结果汇总 + online-offline 回填)
   ├─ dummy.py      仿真受控端 (没有真设备时的替身, 一次起 N 台给多机/多操纵端测试用)
   ├─ peerjs_selftest.py  PeerJS 真机自检 (连公开 broker; 假屏幕假输入, 不动真实光标)
   ├─ proto/        kuuki_remote.proto 与生成的 gRPC 存根
   └─ README.md     扩展的完整文档 (协议 / op 表 / 本机实测与坑)
-test_remote.py   remote/ 扩展的测试 (113 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端/PeerJS 回环用例)
+test_remote.py   remote/ 扩展的测试 (126 项, 不动鼠标键盘; 含平台门禁/跨传输等价/多机多操纵端/PeerJS 回环/vision 定位用例)
 wincheck.py      Windows 侧自检 (三种传输, 只读状态 + 截屏)
 start-win.bat    Windows 侧启动脚本 (venv.ps1 建虚拟环境)
 docs/puppet-multi-machine.md  多机 Puppet 方案 (一个控制端管 N 台被控机, P1-P3/P6 已落地)
 docs/ctl-selfhost-runbook.md  控制端实战手册: 实测记录 / 注意事项 / 一步步复现本机自控
-check_ctl_docs.py             校验文档代码块里的 ctl 命令是否还被 parser 认得 (防文档过期)
-gen_knowledge_index.py        重生成 docs/knowledge/README.md 索引 (新增知识点后用真 parser 不需要, 跑它即可)
-docs/knowledge/               **踩坑与注意事项, 一个文件一个知识点 (54 条), 见 docs/knowledge/README.md**
+check_ctl_docs.py             把文档代码块里的命令喂给真 parser (四个 CLI 全覆盖, 防文档过期)
+gen_knowledge_index.py        重生成 docs/knowledge/README.md 索引 (新增知识点后跑它即可)
+docs/knowledge/               **踩坑与注意事项, 一个文件一个知识点 (59 条), 见 docs/knowledge/README.md**
 
 # ---- 调试 / 演示小工具 ----
 annotate.py      截图上叠坐标网格 + 标记目标点/色块, 核对"算出的坐标偏没偏"

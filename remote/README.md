@@ -128,6 +128,52 @@ python -m remote.client grpc stream /tmp/frames --fps 2 --count 5
 
 带 token 时加 `--token XXX` (WS 拼进 URL + 握手头, gRPC 放进 metadata)。
 
+#### 3.1.1 `locate`: 让客户端自己算出来该点哪儿
+
+`screenshot` 只把图给你 —— 还得**有人看图**才知道往哪点。`locate` 把这一步也做掉:
+抓一帧 → 在图上找 → **直接吐出可以喂给 `mouse.click` 的真实屏幕坐标**。算法都在
+`remote/vision.py`, 纯 Pillow 实现, **不新增 numpy / OpenCV 依赖**。
+
+```bash
+# 网格概览 (默认模式): 切成 8x5 块, 报每块主色与"内容量" (标准差, 留白接近 0)
+python -m remote.client ws locate --describe --max-width 1000 --top 40
+
+# 主色调: 先看这一屏由哪些颜色构成, 再挑一种去精确定位
+python -m remote.client ws locate --dominant --top 10
+
+# 按颜色定位 —— 例: 浏览器标签栏那条窄带里的 favicon
+python -m remote.client ws locate --color "#1a73e8" --region 0,0,1680,90 --top 5
+
+# 找"任何颜色鲜艳的小方块" —— 不知道目标颜色时的第一招 (图标 / 按钮)
+python -m remote.client ws locate --saturated --region 0,0,1680,90 --top 20
+
+# 模板匹配: 先裁一块存成模板, 之后按形状找它
+python -m remote.client ws locate --box 100,200,40,24 --save-template send.png
+python -m remote.client ws locate --template send.png --threshold 0.85
+
+# 帧差: 找出操作前后的变化区 —— 用来确认"这一下点没点出反应"
+python -m remote.client ws locate --save-frame before.png
+python -m remote.client ws locate --diff-with before.png
+```
+
+每个匹配同时给**两套坐标** —— `center` 是图上的位置, `screen` 是乘过缩放系数、
+能直接丢给 `mouse.click` 的真实屏幕坐标:
+
+```json
+{"mode": "color", "scale": 1.68, "matches": [
+  {"x": 100, "y": 50, "w": 40, "h": 20, "center": {"x": 120, "y": 60},
+   "screen": {"x": 202, "y": 101}, "score": 1.0}]}
+```
+
+> **`scale` 靠帧头里的 `source_width` 算**, 而 `--max-width` 会把图缩小 —— 早先 WS
+> 的二进制帧头漏了 `source_width`, `scale` 恒等于 1.0, 于是定位出来的坐标全部偏掉
+> 一个缩放比。已修, 详见 `docs/knowledge/env-ws-frame-missing-source-width.md`。
+
+> **纯视觉认不出「这是哪个窗口」**: 一排彩色小图标既可能是浏览器标签栏, 也可能是
+> 某个桌面应用的会话列表, 光看图像区分不了。要可靠地指定目标应用还得有
+> `window.list` / `window.focus` 这类 op, 目前没有 ——
+> 见 `docs/knowledge/gui-window-focus-gap.md`。
+
 ### 3.2 `python -m remote.ctl` (多机控制级)
 
 先把机器记进 registry (`~/.kuuki/registry.json`, `--registry` 可改), 之后按**别名 / 组 / 全体**
@@ -352,8 +398,8 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `screen.size` *`size`* | — | 屏幕尺寸 |
 | `screen.monitors` *`monitors`* | — | 屏幕列表 (**尚未实现**, 见 `docs/puppet-multi-machine.md` 的待办) |
 | `screen.screenshot` *`screenshot`/`capture`* | `format` `quality` `region` `max_width` `max_height` `scale` `draw_cursor` `include_image` `binary` | 抓一帧 |
-| `screen.grab` | 同上 | 同上, 强制二进制帧 (WS) |
-| `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 |
+| `screen.grab` | 同上 | 同上, 强制二进制帧 —— **仅 WS** (`remote/ws_server.py` 直接处理) |
+| `screen.watch` / `screen.unwatch` | `fps` `count` `watch_id` | 推流 —— **仅 WS**; gRPC 走 `StreamScreenshots` 服务端流式 |
 | `mouse.position` *`position`* | — | 当前光标 |
 | `mouse.move` *`move`* | `x` `y` `duration` | 绝对定位 (`duration>0` 平滑) |
 | `mouse.move_rel` *`move_rel`* | `dx` `dy` `duration` | 相对移动 |
@@ -369,7 +415,15 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `keyboard.hold` *`hold`* | `key` `ms` | 按住单键 `ms` 毫秒再松开 |
 | `keyboard.paste` *`paste`* | `text` | 写剪贴板 + Ctrl/Cmd+V (**中文/emoji 用这个**) |
 | `keyboard.check` *`check`/`keys`* | `keys` 或 `key` | **预检**键能不能发 (不按键) |
+| `notify` *`popup`* | `message` `detail` `seconds` `corner` | 屏角弹一个**不抢焦点**的角标 (`remote/toast.py`)。`corner` 取 `br/tr/tl/bl`。**gRPC 侧尚未暴露** —— 见下面 ⚠️ |
 | `kuuki` *`sensor`* | `message` | 老协议透传 |
+
+> ⚠️ **三传输并不完全等价**: 上表里 `screen.grab` / `screen.watch` 只在 WS 实现
+> (gRPC 的推流走的是 `StreamScreenshots` 服务端流式, 不是 op), `notify` 则只在
+> WS / PeerJS 实现 —— `remote/grpc_server.py` 里没有对应的 RPC。三条传输"同一份
+> `handle`"只对手表里的**鼠标/键盘/截屏**那部分成立, 加新 op 时两个翻译层都要跟上
+> (见 `docs/knowledge/arch-one-impl-three-transports.md`) 与
+> `docs/knowledge/todo-open-items.md`。
 
 ## 8. 截屏实现与已知限制
 
@@ -392,7 +446,15 @@ PNG 魔数正确; region 裁剪 + `max_width` 缩放 (320x200 区域 → 160x100
 ### ⚠️ 中文 / emoji 用 `keyboard.paste`, 不要用 `keyboard.type`
 
 `keyboard.type` 是逐字符注入, 非 ASCII 不稳; 中文 / emoji 走 `keyboard.paste`
-(写剪贴板 + 发 `Ctrl+V`)。剪贴板工具探测顺序
+(写剪贴板 + 发 `Ctrl+V`)。
+
+写剪贴板这条路在 Windows 上**不走命令行工具** —— `_set_clipboard_windows()` 直接调
+`SetClipboardData(CF_UNICODETEXT)` 写 UTF-16LE。`clip.exe` 会按控制台代码页 (GBK)
+解释 stdin, 中文必然变成 "浣犲ソ" 这类乱码。`info.clipboard_tool` 报的 `clip`
+是**兜底**路径的探测结果, 不代表 `paste` 实际用了它; 真正用过的工具名在
+`paste` 的返回值里 (`"win32"` 表示走了 Win32 API, 省事又无损)。
+
+兜底时的探测顺序 (非 Windows, 或 Win32 写入失败):
 `wl-copy` → `xclip` → `xsel` → `pbcopy` → `clip`。
 
 ### 历史实测: WSLg / X11 (不再支持, 仅作参考)
@@ -456,7 +518,8 @@ zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstalle
 ## 10. 测试与验证状态
 
 ```bash
-python -m pytest test_remote.py -v      # 113 项 (含参数化; 15 项专测控制端, 13 项专测 PeerJS)
+python -m pytest test_remote.py -v   # 126 passed / 1 skipped
+                                     # 其中 29 项专测控制端, 16 项专测 PeerJS, 8 项专测 vision
 python -m remote --selftest --selftest-input
 ```
 

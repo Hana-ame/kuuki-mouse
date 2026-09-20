@@ -185,8 +185,8 @@ def _set_clipboard_windows(text: str, retries: int = 10, delay: float = 0.05) ->
     ``clip`` 按**控制台当前代码页**解释 stdin 的字节。中文 Windows 的活动代码页
     是 936 (GBK), 于是任何 UTF-8 输入都会被当成 GBK: 一个三字节的汉字会被拆成
     一个半 GBK 字, 粘出来就是 "浣犲ソ" 这类乱码 (实测: ``keyboard.paste``
-    发 "你好kuuki" 得到 "浣犲ソkuuki")。这件事从外部很难救 —— 换 whatever code
-    page 会污染整个会话, 而且不一定装了 UTF-8 代码页。
+    发 "你好kuuki" 得到 "浣犲ソkuuki")。这件事从外部很难救 —— 临时改控制台代码页
+    会污染整个会话, 而且不一定装了 UTF-8 代码页。
 
     直接调 ``SetClipboardData(CF_UNICODETEXT, ...)`` 写 UTF-16LE 就完全没有这条
     路径: 剪贴板原生就是 Unicode 格式, 粘贴端读到的就是原字。

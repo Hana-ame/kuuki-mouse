@@ -19,13 +19,12 @@ name: Build kuuki-agent
 
 on:
   push:
-    # 只挂 feat/remote-control: master 上**还没有** remote/ 和 packaging/
-    # (这个扩展还没合过去), 挂上去等于保证它一 push 就红。
-    # 等 remote 合进 master 了, 再把 master 加回来。
-    branches: [feat/remote-control]
+    # master 上得先有 remote/ 和 packaging/ 才能挂 —— remote 扩展合进 master 之后
+    # (2026-09-20) 才把它加回来。之前挂过一次, master 上没这些目录, 一 push 就红。
+    branches: [master, feat/remote-control]
     tags: ["v*"]
   pull_request:
-    branches: [feat/remote-control]
+    branches: [master, feat/remote-control]
   workflow_dispatch:
 
 permissions:

@@ -63,6 +63,13 @@ python -m remote --qr                     # 额外打印配对二维码 (终端 
 python -m remote --page-url https://me.github.io/kuuki-mouse/   # 页面不在默认地址时
 ```
 
+**开关语义**: 点名即选择 —— 给了任何 `--ws` / `--grpc` / `--peerjs` 就以给的那几个为准,
+一个都没给才用默认 (只 PeerJS)。所以 `--ws` 是"只要 WebSocket", 不会顺带把 PeerJS 也
+注册到公开 broker 上。`--no-xxx` 是在这个结果上再减 (`--ws --no-peerjs` 仍是只要 WS)。
+
+一个传输都不开会拒绝启动; 给了 `--ws-port` / `--grpc-port` / `--room` 却没开对应传输
+同样拒绝 —— 这类组合换了端口服务却没起来, 静默放行会让人排查半天。
+
 **非 Windows 拒绝启动** (退出码 2, 与 `--allow-remote` 缺 token 的拒绝一致):
 
 ```

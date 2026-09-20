@@ -43,6 +43,7 @@ python -m remote                     # 默认三个一起起: WS 8765 + gRPC 500
 python -m remote --no-peerjs         # 只要本机两个端口, 不连公开 broker
 python -m remote --no-ws --no-grpc   # 只开 PeerJS (不需要任何开放端口)
 python -m remote --room ABCD123      # 指定 PeerJS 房间码 (默认随机生成)
+python -m remote --qr                # 额外打印配对二维码 (启动本来就会给配对链接)
 python -m remote --selftest          # 自检: 报告截屏后端 + 抓一帧 (不动鼠标)
 python -m remote.client ws ping      # 命令行客户端
 ```

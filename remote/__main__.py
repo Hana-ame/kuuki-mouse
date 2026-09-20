@@ -155,6 +155,11 @@ def guess_page_url() -> str:
     return FALLBACK_PAGE_URL
 
 
+def pair_page(args: argparse.Namespace) -> str:
+    """手机端页面地址: 命令行给了就用给的, 否则从 git remote 推断。"""
+    return (args.page_url or guess_page_url()).rstrip("/")
+
+
 def show_qr(url: str, room: str) -> None:
     """打印配对二维码 (终端 ASCII + PNG)。
 
@@ -270,7 +275,12 @@ async def run_servers(args: argparse.Namespace) -> int:
         endpoints.append(peerjs_server.describe())
 
     if args.json:
-        print(json.dumps({"version": VERSION, "endpoints": endpoints}, ensure_ascii=False, indent=2))
+        payload = {"version": VERSION, "endpoints": endpoints}
+        # 配对链接也给一份: --json 是给程序读的 (自己做 UI / 自己出码),
+        # 让人去解析 endpoints 拼 URL 没道理
+        if peerjs_server is not None:
+            payload["pair_url"] = f"{pair_page(args).rstrip('/')}/#/{peerjs_server.room}"
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
         print(f"kuuki remote {VERSION} 已启动")
         for endpoint in endpoints:
@@ -296,7 +306,7 @@ async def run_servers(args: argparse.Namespace) -> int:
         # 手机端是扫码/打开链接配对的主路径, 只给个裸房间码等于让人手打五位数。
         # 二维码里不放 token (码会被截图转发), 设了 token 就提示手填。
         if peerjs_server is not None:
-            page = (args.page_url or guess_page_url()).rstrip("/")
+            page = pair_page(args)
             room = next(
                 (e["room"] for e in endpoints if e["transport"] == "peerjs"), ""
             )

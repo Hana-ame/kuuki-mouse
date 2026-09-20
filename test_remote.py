@@ -1516,3 +1516,59 @@ def test_force_utf8_stdio_tolerates_replaced_streams():
         gate.force_utf8_stdio()  # 不抛即为通过
     finally:
         sys.stdout = original
+
+
+# ---------------- notify (角标通知) ----------------
+# 打包后的 exe 排除了 tkinter, 所以这条路在分发版上是走不通的 —— 必须报明确的
+# unsupported, 而不是返回 shown=false 让人以为弹了。之前这个 op 一条测试都没有。
+
+
+def test_notify_without_gui_backend_reports_unsupported(monkeypatch):
+    """没有图形环境时要说清楚是 unsupported, 不是假装成功了。"""
+    from remote.service import RemoteError, RemoteService
+
+    toast = pytest.importorskip("remote.toast")
+    monkeypatch.setattr(toast, "notify_supported", lambda: False)
+
+    service = RemoteService(screen=fake_screen())
+    with pytest.raises(RemoteError) as excinfo:
+        service.handle("notify", {"message": "hello"})
+    assert excinfo.value.code == "unsupported"
+
+
+def test_notify_shows_when_backend_available(monkeypatch):
+    """有图形环境时真的去弹, 并把结果照实报回来。"""
+    from remote.service import RemoteService
+
+    toast = pytest.importorskip("remote.toast")
+    calls = []
+    monkeypatch.setattr(toast, "notify_supported", lambda: True)
+    monkeypatch.setattr(
+        toast,
+        "notify",
+        lambda message, detail="", seconds=6.0, corner="br", width=420: (
+            calls.append((message, detail, seconds, corner)) or True
+        ),
+    )
+
+    service = RemoteService(screen=fake_screen())
+    result = service.handle("notify", {"message": "hi", "detail": "d", "corner": "tl"})
+    assert result["shown"] is True
+    assert result["corner"] == "tl"
+    assert calls == [("hi", "d", 6.0, "tl")]
+
+
+def test_notify_validates_arguments(monkeypatch):
+    from remote.service import RemoteError, RemoteService
+
+    toast = pytest.importorskip("remote.toast")
+    monkeypatch.setattr(toast, "notify_supported", lambda: True)
+
+    service = RemoteService(screen=fake_screen())
+    with pytest.raises(RemoteError) as excinfo:
+        service.handle("notify", {})
+    assert excinfo.value.code == "bad_request"
+
+    with pytest.raises(RemoteError) as excinfo:
+        service.handle("notify", {"message": "hi", "corner": "middle"})
+    assert excinfo.value.code == "bad_request"

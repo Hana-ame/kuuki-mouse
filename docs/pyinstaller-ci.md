@@ -148,3 +148,14 @@ CI 的干净环境一跑就露馅: `check_bundle.py` 报 `MISS aiohttp`, 模块�
 - 没做代码签名 —— 分发出去会被 SmartScreen 拦, 使用者得点"仍要运行"
 - 没做 macOS / Linux 产物 (受控端本就不支持, 见第 1 节)
 - 没精简体积: `pytest` / `tkinter` 已排除, 但 `av` 的编解码器没挑过, 还有压缩空间
+
+### 7.1 排除 tkinter 的代价: exe 里的 `notify` 用不了
+
+`tkinter` 被排除是为了体积 (它会拖进整套 Tcl/Tk 运行时), 代价是 `remote/toast.py`
+的角标通知在 exe 里走不通 —— `notify_supported()` 探不到 tkinter。
+
+这不是静默失败: `_op_notify` 会先检查并抛 `unsupported`, 控制端拿到的是
+`"角标通知需要被控端有 tkinter 图形环境"`, 而不是一个假的 `shown: false`。
+源码运行 (`python -m remote`) 时桌面 Python 自带 tkinter, 功能正常。
+
+要让分发版也支持, 把 spec 的 `excludes` 里那行 `tkinter` 删掉即可, 代价是体积。

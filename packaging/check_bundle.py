@@ -45,6 +45,10 @@ REQUIRED = {
     "WebRTC": ["aiortc", "av", "aioice", "pyee", "aiohttp"],
     "传输与平台": ["grpc", "google.protobuf", "websockets", "PIL", "PIL.ImageGrab",
                    "pynput", "pynput.mouse._win32", "pynput.keyboard._win32"],
+    # 仓库根顶层模块: 不是 remote 的子模块, 不会跟着 remote 自动进包, 只能靠
+    # hiddenimports 显式列 —— 列漏了的话英文系统上 --help 直接崩 (utf8_stdio),
+    # 或者 --qr 永远走降级分支 (qrcode), 两种都静悄悄, 只能靠这里盯住
+    "仓库根模块": ["utf8_stdio", "qrcode"],
 }
 
 
@@ -53,8 +57,9 @@ def load_modules(toc_path: str) -> set[str]:
 
     TOC 是 PyInstaller 写出的 **repr 文本** ``(pyz_path, [(name, ...), ...])``
     (不是 pickle, 虽然长得像 protocol 0), 所以用 ``literal_eval``; pickle 留作回退。
-    这是 PyInstaller 的内部实现细节, 换了版本可能变 —— 所以调用方要把读不出来
-    当成"跳过检查"而不是"构建失败"。
+    这是 PyInstaller 的内部实现细节, 换了版本可能变 —— 但读不出来时调用方是
+    **当构建失败处理** (退出码 2) 的: 检查读不出清单等于什么都没查, 让它悄悄过去
+    比红一次更危险。
     """
     raw = open(toc_path, encoding="utf-8", errors="replace").read()
     try:

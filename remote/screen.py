@@ -91,6 +91,11 @@ class Capture:
     captured_at: float = 0.0
     duration_ms: float = 0.0
     cursor: Optional[dict] = None
+    #: 抓屏用的后端。现在只有一个 (PIL.ImageGrab), 早先的 mss / ffmpeg x11grab 降级链
+    #: 已经不存在了 —— 但字段留着: 协议头里要报它, 让控制端知道这一帧是怎么来的。
+    #: (wincheck.py 曾经读 capture.backend 直接 AttributeError, 就是因为只有协议头里
+    #:  硬编码了一份 "pillow", Capture 上反而没有。真值只能有一份。)
+    backend: str = "pillow"
 
     @property
     def bytes(self) -> int:

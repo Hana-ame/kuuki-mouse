@@ -128,6 +128,17 @@ def test_capture_full_frame_and_encoding():
         _capture(screen, {"format": "bmp"})
 
 
+def test_capture_reports_its_backend():
+    """Capture 得自带 backend —— 协议头里报的就是它。
+
+    之前只有 ws_server 里硬编码了一份 "pillow", Capture 上反而没这个字段, 于是
+    wincheck.py 读 ``capture.backend`` 直接 AttributeError 崩掉 (照 README/文档跑
+    一遍才发现)。真值只能有一份, 所以字段挪到 Capture 上、协议头改成读它。
+    """
+    capture, _ = _capture(fake_screen(), {"format": "png"})
+    assert capture.backend == "pillow"
+
+
 def test_capture_region_scale_and_limits():
     screen = fake_screen()
     capture, _ = _capture(screen, {"region": [50, 25, 10, 10]})
@@ -1580,6 +1591,14 @@ def test_room_without_peerjs_is_reported():
     """同上: 指定了房间码却没开 PeerJS, 房间码就白给了。"""
     _, conflicts = _resolve(["--ws", "--room", "ABCDE"])
     assert any("--peerjs" in problem for problem in conflicts)
+
+
+def test_qr_without_peerjs_is_reported():
+    """--qr 配的是房间码, 没开 PeerJS 就无码可配 —— 以前会静默什么都不打印。"""
+    _, conflicts = _resolve(["--ws", "--qr"])
+    assert any("--peerjs" in problem for problem in conflicts)
+    # 默认开着 PeerJS, 这时不该吵
+    assert _resolve(["--qr"])[1] == []
 
 
 def test_main_refuses_when_every_transport_is_off(monkeypatch, capsys):

@@ -203,6 +203,8 @@ def transport_conflicts(args: argparse.Namespace, transports: list) -> list:
         problems.append("--grpc-port 只在 gRPC 开启时有效: 要再加 --grpc")
     if args.room and "peerjs" not in transports:
         problems.append("--room 只在 PeerJS 开启时有效: 要再加 --peerjs")
+    if args.qr and "peerjs" not in transports:
+        problems.append("--qr 只在 PeerJS 开启时有效: 二维码配的是房间码, 要再加 --peerjs")
     return problems
 
 

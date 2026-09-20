@@ -132,7 +132,7 @@ python -m remote.ctl tail  frames -t pc1                  # 一直抓到 Ctrl-C
   「文件锁不跨线程」「`os.replace` 目标被占用会 WinError 5」「tmp 名撞 pid」三个坑，见
   [ctl-selfhost-runbook.md](ctl-selfhost-runbook.md) 第 4.5 节。
 - **没有真设备也能验多机**：`python -m remote.dummy --count 3` 起一批仿真受控端（各自的屏幕/延迟/
-  操作日志，可单独注入故障），registry 直接由它生成。111 项测试里有 13 项在跑这套。
+  操作日志，可单独注入故障），registry 直接由它生成。113 项测试里有 13 项在跑这套。
 - **PeerJS 不必"等有外网再说"**：13 项回环测试跑的是与真机相同的代码路径，另有
   `python -m remote.peerjs_selftest` 连公开 broker 做真机自检（注册 2s / 握手 13s /
   192KB 截图分块传送逐字节相同）。逐环节分析与修掉的 9 个问题见
@@ -187,9 +187,9 @@ python -m remote.ctl tail  frames -t pc1                  # 一直抓到 Ctrl-C
 
 - `remote/` 三传输 + op 注册表（2026-09-19 跨机 WS 实测：`ping` 通、1680×1050 截图 132ms；agent 侧现在只允许 Windows）
 - `remote/input.py` 完整动作集（2026-09-20：多步滚动 / 路径点拖动 / combo 的 `hold_ms` / `hold` 长按），
-  `test_remote.py` 111 项测试覆盖（含跨传输等价用例、控制端用例、PeerJS 回环用例），全部用假鼠标键盘断言
+  `test_remote.py` 113 项测试覆盖（含跨传输等价用例、控制端用例、PeerJS 回环用例），全部用假鼠标键盘断言
 - `remote/client.py` 的 `WsClient` / `GrpcClient` / `PeerJsClient`：P3 的分发层直接复用它，不用新写传输
-- `remote/ctl.py`（2026-09-20）：多机控制端 —— registry + 目标解析 + 并发分发 + 结果汇总，测试 111 项里的 15 项专测它
+- `remote/ctl.py`（2026-09-20）：多机控制端 —— registry + 目标解析 + 并发分发 + 结果汇总，测试 113 项里的 15 项专测它
 - `remote/peerjs_selftest.py`（2026-09-20）：PeerJS 真机自检入口（连公开 broker，假屏幕假输入）
 - 三条踩过的坑已固化：`op` / `check` / `shot` 等命令的目标必须走 `-t/-g/-a`（位置参数互相吞）；测试里起 WS 服务端必须在**同一个协程**里跑完（`asyncio.run` 一结束就关 socket）；gRPC 的 `Ack{ok, message}` 里塞的是 JSON 字符串，客户端要拆回对象才能与 WS 的返回值比（`remote/client.py::_unwrap_ack`）
 - `click.html` + `p2p_clicktarget.py`：点击自验证靶（`_clicks.jsonl`）

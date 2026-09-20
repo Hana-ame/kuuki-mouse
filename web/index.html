@@ -17,6 +17,8 @@
         <section id="pair" class="card">
             <label for="roomInput">房间码</label>
             <input id="roomInput" placeholder="ABCDE" autocomplete="off" autocapitalize="characters" maxlength="8">
+            <label for="tokenInput">Token (主机设了 <code>--token</code> 才要填)</label>
+            <input id="tokenInput" type="password" placeholder="留空 = 主机没设 token" autocomplete="off">
             <button id="pairBtn">开始配对</button>
         </section>
 

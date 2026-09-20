@@ -13,13 +13,23 @@
     const statusEl = $('status'), pairEl = $('pair'), controlEl = $('control');
     const sensorsEl = $('sensors'), chanEl = $('chan');
 
-    // ---------------- 房间码 ----------------
+    // ---------------- 房间码 / token ----------------
     function roomFromHash() {
         const m = location.hash.match(/#\/([A-Za-z0-9]+)/);
         return m ? m[1].toUpperCase() : null;
     }
+    // 二维码可以把 token 一并带上: #/ABCDE?token=xxx —— 手机扫码就不用手打
+    function tokenFromHash() {
+        const m = location.hash.match(/[?&]token=([^&]+)/);
+        return m ? decodeURIComponent(m[1]) : '';
+    }
     let room = roomFromHash();
     if (room) $('roomInput').value = room;
+    let token = tokenFromHash();
+    if (token) $('tokenInput').value = token;
+    // 主机设了 --token 时, 不先 auth 就发数据会被拒收并断开 —— 连上先握手再说话
+    let authed = false;
+    let authFailed = false;   // token 不对时别再自动重连, 否则一直转圈且不说原因
 
     // ---------------- 传感器状态 ----------------
     let accel = { x: 0, y: 0, z: 0 };
@@ -67,7 +77,8 @@
         if (msg.t === 'sensor' && now - lastSend < SEND_INTERVAL_MS) return;
         lastSend = now;
         const s = JSON.stringify(msg);
-        if (sendViaPeer && conn && conn.open) {
+        // authed 之前不发: 主机设了 token 时, 抢在 auth 前发的数据会被当成未授权直接拒掉
+        if (sendViaPeer && conn && conn.open && authed) {
             try { conn.send(msg); } catch (e) { /* ignore */ }
         }
         if (mqttc && mqttc.connected && room) {
@@ -89,20 +100,48 @@
             conn = peer.connect(`${PEER_PREFIX}-${room}`, { serialization: 'json', reliable: false });
             conn.on('open', () => {
                 sendViaPeer = true;
+                authed = false;
+                // 无论主机有没有设 token 都先握手: 没设的话服务端照样回 authenticated,
+                // 设了的话这一步就能拿到明确的"未授权"而不是被闷声断开
+                try { conn.send({ op: 'auth', args: { token: token || '' } }); } catch (e) {}
+                // 保险: 服务端不回 auth 包时别把通道卡死 (老版本不回这个响应)
+                setTimeout(() => { if (!authed && !authFailed) authed = true; }, 1500);
                 statusEl.textContent = `已连接房间 ${room} (PeerJS)`;
                 controlEl.classList.remove('hidden');
                 sensorsEl.classList.remove('hidden');
                 chanEl.textContent = 'PeerJS 直连';
             });
+            conn.on('data', (d) => {
+                if (!d || typeof d !== 'object') return;
+                if (d.ok && d.result && d.result.authenticated) {
+                    authed = true;
+                    authFailed = false;
+                    chanEl.textContent = 'PeerJS 直连 (已鉴权)';
+                } else if (d.error && d.error.code === 'unauthorized') {
+                    authFailed = true;
+                    authed = false;
+                    chanEl.textContent = '未授权';
+                    statusEl.textContent = '主机要求 token 且校验未通过 — 在配对区填对后重新配对';
+                }
+            });
             conn.on('close', () => {
                 sendViaPeer = false;
+                authed = false;
+                if (authFailed) {
+                    // 再连也只是再被拒一次, 而且用户看不出为什么 —— 停下来把原因说清楚
+                    statusEl.textContent = 'token 未通过, 已停止重连 — 改对后点"开始配对"';
+                    chanEl.textContent = '未授权';
+                    return;
+                }
                 statusEl.textContent = 'PeerJS 断开, 重连中...';
-                chanEl.textContent = 'MQTT 兜底';
+                // 诚实一点: remote 受控端 (python -m remote / kuuki-agent.exe) 不订阅 MQTT,
+                // 只有老版 main.py 收。写"兜底"会让人以为消息还有人接。
+                chanEl.textContent = 'MQTT 兜底 (仅老版 main.py)';
                 setTimeout(connectPeer, 1500);
             });
             conn.on('error', () => {
                 sendViaPeer = false;
-                setTimeout(connectPeer, 1500);
+                if (!authFailed) setTimeout(connectPeer, 1500);
             });
         });
         peer.on('error', (e) => {
@@ -316,6 +355,8 @@
     $('pairBtn').addEventListener('click', async () => {
         room = ($('roomInput').value || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
         if (!room) { statusEl.textContent = '请输入房间码'; return; }
+        token = ($('tokenInput').value || '').trim();
+        authFailed = false;   // 改过 token 就值得再试一次
         history.replaceState(null, '', `#/${room}`);
         const ok = await requestPermission();
         if (!ok) { statusEl.textContent = '传感器权限被拒绝'; return; }

@@ -73,11 +73,23 @@ jobs:
           python -c "import grpc, google.protobuf, websockets, PIL, pynput; print('transport ok')"
           python -c "import peerjs, aiortc, av, aioice; print('webrtc ok')"
 
+      - name: 准备 Node (跑 web 界面的逻辑测试)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: 单元测试 (打包前先确认逻辑没坏)
         # 放在打包之前: 逻辑错了就没必要花一分钟打一个注定是坏的 exe。
         # 依赖本机环境的用例自己会 skip (见 test_remote.py 里的 has_real_backend 等),
         # 所以 runner 上没有桌面/没有中文 locale 也不会假红。
         run: pytest test_remote.py -q
+
+      - name: web 界面逻辑测试 (键盘 / token 握手)
+        # web/ 是手机端的操作界面, 之前**零测试覆盖**: 键盘布局和 token 握手改坏了没人知道。
+        # 用 node + 最小 DOM 桩跑真的 script.js —— 见 tests/web_ui.test.js。
+        env:
+          PY: python   # 键名要能在 controller.special_keys 里查到, 否则键摆上去也按不动
+        run: node tests/web_ui.test.js
 
       - name: 文档代码块校验 (README/docs 里的命令得真能解析)
         # 文档里的 CLI 示例会随代码腐烂 —— 之前就是它抓出 shot 的位置参数被 path 吞掉。

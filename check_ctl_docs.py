@@ -20,6 +20,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from remote.__main__ import force_utf8_stdio  # noqa: E402
 from remote.ctl import build_parser, _fill_defaults  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
@@ -100,4 +101,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # 文档里的命令带中文注释 (例: "ping all  # 广播"), 打印时在英文系统 (cp1252) 上
+    # 会 UnicodeEncodeError —— 和 remote/__main__.py 里修的是同一个坑, 这里复用同一份
+    force_utf8_stdio()
     raise SystemExit(main())

@@ -187,44 +187,113 @@
         }
     });
 
-    // 屏幕全键盘: 点键立即发送
-    const KB_ROWS = [
-        ['1','2','3','4','5','6','7','8','9','0','-','=','⌫'],
-        ['q','w','e','r','t','y','u','i','o','p','[',']','\\'],
-        ['a','s','d','f','g','h','j','k','l',';',"'",'⏎'],
-        ['⇧','z','x','c','v','b','n','m',',','.','/','⇥'],
-        ['空格'],
-    ];
-    const KB_SPECIAL = { '⌫': 'Backspace', '⏎': 'Enter', '⇥': 'Tab', '空格': 'Space' };
-    function kbLabel(k) { return (shiftOn && /^[a-z]$/.test(k)) ? k.toUpperCase() : k; }
-    function kbRender() {
-        document.querySelectorAll('#keyboard .key').forEach((b) => { b.textContent = kbLabel(b.dataset.raw); });
+    // ---------------- 屏幕键盘: 标准 PC 布局 ----------------
+    //
+    // 按 ANSI 标准键盘排: Tab 在 Q 左边、Caps 在 A 左边、Shift 在 Z 左边、
+    // Enter 在 L 右边、Backspace 在数字行右端 —— 手指记得住的位置不能错。
+    // 之前那版 Tab 被塞在 Z 行末尾、整行没有 Caps, 看着像键盘用着不像。
+    //
+    // 两层: main = 主键区, fn = F1~F12 + 方向键/编辑键 (标准键盘也有这一层)。
+    const KB_ROWS = {
+        main: [
+            ['Esc','1','2','3','4','5','6','7','8','9','0','-','=','⌫'],
+            ['Tab','q','w','e','r','t','y','u','i','o','p','[',']','\\'],
+            ['Caps','a','s','d','f','g','h','j','k','l',';',"'",'Enter'],
+            ['Shift','z','x','c','v','b','n','m',',','.','/','Shift'],
+            ['Ctrl','Win','Alt','␣','Alt','Fn'],
+        ],
+        fn: [
+            ['Esc','F1','F2','F3','F4','F5','F6','F7','⌫'],
+            ['F8','F9','F10','F11','F12','Ins','Del','Enter'],
+            ['↑','↓','←','→','Home','End','PgUp','PgDn'],
+            ['Ctrl','Win','Alt','␣','Alt','Fn'],
+        ],
+    };
+    // 屏幕上的标签 -> 发给 Python 端的键名 (得过 controller.special_keys / resolve_key)
+    const KEY_NAMES = {
+        '⌫': 'backspace', '␣': 'space', 'Esc': 'esc', 'Enter': 'enter', 'Tab': 'tab',
+        '↑': 'up', '↓': 'down', '←': 'left', '→': 'right',
+        'Home': 'home', 'End': 'end', 'PgUp': 'page_up', 'PgDn': 'page_down',
+        'Ins': 'insert', 'Del': 'delete', 'Win': 'cmd',
+        'Ctrl': 'ctrl', 'Alt': 'alt',
+    };
+    for (let i = 1; i <= 12; i += 1) KEY_NAMES['F' + i] = 'f' + i;
+    // 修饰键按标准键盘的相对宽度摆: 空格最宽, Enter/Shift 次之
+    const KEY_FLEX = { Tab: 1.5, Caps: 1.8, Enter: 2.2, '⌫': 1.5, Shift: 2.0,
+                       Ctrl: 1.3, Win: 1.3, Alt: 1.3, Fn: 1.3, '␣': 6 };
+
+    let fnLayer = false;    // Fn 层 (F1~F12 / 方向键)
+    let capsOn = false;     // Caps Lock: 锁定, 按一下一直大写
+    let mods = [];          // 一次性组合修饰: 点 Ctrl 再点 C == Ctrl+C
+
+    // Shift 与 Caps 是"异或"关系 —— 和真键盘一样: 都开着反而小写
+    function isUpper() { return capsOn !== shiftOn; }
+    function labelOf(raw) { return (/^[a-z]$/.test(raw) && isUpper()) ? raw.toUpperCase() : raw; }
+
+    function sendWithMods(name) {
+        // 组合键里的字母统一小写: Ctrl+C 和 Ctrl+c 是同一个键, 不能让 Caps/Shift
+        // 的当前状态渗进来 (开着 Caps 时点 Ctrl+C 会发出 "ctrl+C", 语义上是脏的)
+        const norm = (name.length === 1) ? name.toLowerCase() : name;
+        if (mods.length) {
+            sendControl({ t: 'key', key: mods.concat(norm).join('+') });  // ctrl+c
+            mods = [];
+        } else {
+            sendControl({ t: 'key', key: name });
+        }
+        renderKeys();
     }
+
+    function onKey(raw) {
+        setInputMode(true);
+        // 修饰键本身不发送, 只改状态 (真键盘上单按 Ctrl 也不会输出字符)
+        if (raw === 'Shift') { shiftOn = !shiftOn; renderKeys(); return; }
+        if (raw === 'Caps') { capsOn = !capsOn; renderKeys(); return; }
+        if (raw === 'Fn') { fnLayer = !fnLayer; buildKeyboard(); return; }
+        if (raw === 'Ctrl' || raw === 'Alt' || raw === 'Win') {
+            const m = KEY_NAMES[raw];
+            const at = mods.indexOf(m);
+            if (at >= 0) mods.splice(at, 1); else mods.push(m);
+            renderKeys();
+            return;
+        }
+        const name = KEY_NAMES[raw];
+        if (name) { sendWithMods(name); return; }
+        // 普通字符: 有修饰键在就走组合, 否则按 text 发 (支持中文输入法那套逻辑)
+        if (mods.length) { sendWithMods(labelOf(raw)); return; }
+        sendControl({ t: 'text', text: labelOf(raw) });
+        if (shiftOn) { shiftOn = false; }   // Shift 是一次性的, Caps 不是
+        renderKeys();
+    }
+
+    function renderKeys() {
+        document.querySelectorAll('#keyboard .key').forEach((b) => {
+            const raw = b.dataset.raw;
+            b.textContent = labelOf(raw);
+            const on = (raw === 'Shift' && shiftOn) || (raw === 'Caps' && capsOn)
+                    || (raw === 'Fn' && fnLayer) || mods.indexOf(KEY_NAMES[raw]) >= 0;
+            b.classList.toggle('key-on', !!on);
+        });
+    }
+
     function buildKeyboard() {
         const kb = $('keyboard');
-        KB_ROWS.forEach((row) => {
+        kb.textContent = '';
+        KB_ROWS[fnLayer ? 'fn' : 'main'].forEach((row) => {
             const r = document.createElement('div');
             r.className = 'kbd-row';
             row.forEach((k) => {
                 const b = document.createElement('button');
                 b.className = 'key';
-                if (KB_SPECIAL[k] || k === '⇧') b.classList.add('key-fn');
-                if (k === '空格') b.classList.add('key-space');
                 b.dataset.raw = k;
-                b.addEventListener('click', () => {
-                    setInputMode(true);
-                    if (KB_SPECIAL[k]) sendControl({ t: 'key', key: KB_SPECIAL[k] });
-                    else if (k === '⇧') { shiftOn = !shiftOn; kbRender(); }
-                    else {
-                        sendControl({ t: 'text', text: kbLabel(k) });
-                        if (shiftOn && /^[a-z]$/.test(k)) { shiftOn = false; kbRender(); }
-                    }
-                });
+                if (k === '␣') b.classList.add('key-space');
+                else if (k.length > 1 || k === '⌫') b.classList.add('key-fn');
+                if (KEY_FLEX[k]) b.style.flex = String(KEY_FLEX[k]);
+                b.addEventListener('click', () => onKey(k));
                 r.appendChild(b);
             });
             kb.appendChild(r);
         });
-        kbRender();
+        renderKeys();
     }
     buildKeyboard();
 

@@ -45,8 +45,14 @@ button.big { padding: 20px; font-size: 18px; background: #16a34a; }
     border-radius: 8px; background: #262b36; color: #e6e6e6;
 }
 .kbd-row .key:active { filter: brightness(1.35); }
-.kbd-row .key-fn { background: #334155; }
-.kbd-row .key-space { flex: 5; background: #334155; }
+.kbd-row .key-fn { background: #334155; font-size: 13px; }
+.kbd-row .key-space { flex: 6; background: #334155; }
+/* 修饰键按下/锁定时的高亮: Shift / Caps / Ctrl / Alt / Win / Fn。
+   触屏没有 hover, 不给视觉反馈的话根本不知道自己按没按上 */
+.kbd-row .key-on {
+    background: #2563eb; color: #fff;
+    box-shadow: inset 0 0 0 1px #93c5fd;
+}
 
 #sensors { font-size: 12px; color: #9aa3b2; line-height: 1.7; }
 #sensors span { color: #7dd3fc; }

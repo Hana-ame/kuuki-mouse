@@ -210,11 +210,16 @@ def text_event(message: str):
 
 
 def key_event(message: str):
-    if message.lower() in ("calibrate", "c", "recenter"):
+    raw = str(message or "")
+    if raw.lower() in ("calibrate", "c", "recenter"):
         app.calibrate()
         print("已校准: 当前指向设为基准, 光标回屏幕中心")
+    elif "+" in raw:
+        # 组合键 ("ctrl+c"): 手机端标准键盘上的 Ctrl/Alt/Win 就靠这条落地 ——
+        # 触屏没有"按住", 只能把"点 Ctrl 再点 C"表达成一次 combo。
+        app.hotkey(raw)
     else:
-        app.tap_key(message)
+        app.tap_key(raw)
 
 
 def handle_message(msg: dict) -> bool:

@@ -1572,3 +1572,42 @@ def test_notify_validates_arguments(monkeypatch):
     with pytest.raises(RemoteError) as excinfo:
         service.handle("notify", {"message": "hi", "corner": "middle"})
     assert excinfo.value.code == "bad_request"
+
+
+# ---------------- ICE 本机候选地址过滤 ----------------
+# remote/ice.py 之前**一条测试都没有**, 而它做的事很关键: Windows 上断开的虚拟网卡
+# (蓝牙 PAN / OpenVPN TAP) 仍持有 169.254.x.x, 这些地址会被当成 ICE 候选发出去,
+# 对端连它们必然超时。过滤错了的表现就是"跨机连不上, 但同机好好的"。
+
+@pytest.mark.parametrize("address", [
+    "127.0.0.1",      # 回环
+    "::1",
+    "169.254.45.72",  # link-local: 现场那两块断开的网卡就是这种
+    "fe80::1",        # IPv6 link-local
+    "0.0.0.0",        # 未指定
+    "224.0.0.1",      # 组播
+    "不是地址",        # 解析不了的一律不要
+    "",
+])
+def test_ice_drops_unusable_addresses(address):
+    ice = pytest.importorskip("remote.ice")
+    assert ice.is_unusable_address(address) is True
+
+
+@pytest.mark.parametrize("address", [
+    "192.168.1.2",    # 真实局域网: 必须留着, 否则跨机没候选可用
+    "10.0.0.5",
+    "8.8.8.8",
+    "2001:4860:4860::8888",
+])
+def test_ice_keeps_usable_addresses(address):
+    ice = pytest.importorskip("remote.ice")
+    assert ice.is_unusable_address(address) is False
+
+
+def test_ice_patch_can_be_disabled_by_env(monkeypatch):
+    """KUUKI_ICE_KEEP_LINKLOCAL 是排障用的后门: 设了就别过滤, 得真的生效。"""
+    ice = pytest.importorskip("remote.ice")
+    monkeypatch.setenv("KUUKI_ICE_KEEP_LINKLOCAL", "1")
+    monkeypatch.setattr(ice, "_patched", False)   # 幂等开关会影响这条, 先复位
+    assert ice.patch_aioice_addresses() is False

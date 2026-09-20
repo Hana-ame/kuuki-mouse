@@ -29,6 +29,10 @@ import sys
 REQUIRED = {
     "远程核心": ["remote", "remote.service", "remote.screen", "remote.ws_server",
                  "remote.grpc_server", "remote.peerjs_server"],
+    # gRPC 传输的运行必需: *pb2.py 被 .gitignore 挡了一道 (有 !remote/proto/*.py 例外),
+    # 真丢了的话服务端起得来、一连就炸, 所以单独列一组盯着
+    "gRPC存根": ["remote.proto", "remote.proto.kuuki_remote_pb2",
+                 "remote.proto.kuuki_remote_pb2_grpc"],
     # 全是运行期惰性 import 的, 静态分析抓不到 —— 本脚本存在的理由
     "惰性导入": ["peerjs", "peerjs.peer", "peerjs.dataconnection", "peerjs.api",
                  "app", "controller", "attitude"],

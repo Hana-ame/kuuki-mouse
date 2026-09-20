@@ -19,10 +19,13 @@ name: Build kuuki-agent
 
 on:
   push:
-    branches: [feat/remote-control, master]
+    # 只挂 feat/remote-control: master 上**还没有** remote/ 和 packaging/
+    # (这个扩展还没合过去), 挂上去等于保证它一 push 就红。
+    # 等 remote 合进 master 了, 再把 master 加回来。
+    branches: [feat/remote-control]
     tags: ["v*"]
   pull_request:
-    branches: [feat/remote-control, master]
+    branches: [feat/remote-control]
   workflow_dispatch:
 
 permissions:
@@ -77,7 +80,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kuuki-agent-build-warnings
-          path: build/agent/warn-kuuki-agent.txt
+          # PyInstaller 的 warn 文件在 workpath/<spec名>/ 下, 不是 workpath 根目录
+          path: build/agent/kuuki-agent/warn-kuuki-agent.txt
           if-no-files-found: ignore
           retention-days: 14
 
@@ -101,6 +105,37 @@ jobs:
         # 证明 PIL.ImageGrab / pynput 在打包后仍然可用。
         continue-on-error: true
         run: dist/kuuki-agent/kuuki-agent.exe --selftest
+
+      - name: 端到端 —— 源码客户端真连一次打包后的 WS / gRPC
+        # PeerJS 之外的两个传输, 打包后也得真连上才算数: 起 exe, 用源码 client 打过去。
+        # 只走 127.0.0.1, 不依赖外网和桌面, 所以这条是**阻塞**的。
+        # 端口刻意避开默认的 8765/50051, 免得和 runner 上别的东西撞。
+        shell: bash
+        run: |
+          set -uo pipefail
+          EXE=dist/kuuki-agent/kuuki-agent.exe
+          "$EXE" --no-peerjs --ws-port 18765 --grpc-port 50052 > agent_e2e.log 2>&1 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if grep -q '已启动' agent_e2e.log 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat agent_e2e.log
+
+          python -m remote.client ws --url ws://127.0.0.1:18765 ping | tee ws_ping.json
+          grep -q '"pong": true' ws_ping.json
+          python -m remote.client ws --url ws://127.0.0.1:18765 screenshot ws_shot.png > /dev/null
+
+          python -m remote.client grpc --target 127.0.0.1:50052 ping | tee grpc_ping.json
+          grep -q '"pong": true' grpc_ping.json
+          python -m remote.client grpc --target 127.0.0.1:50052 screenshot grpc_shot.png > /dev/null
+
+          # 截图真落盘才算通: WS 那条走二进制帧, gRPC 那条走 protobuf 的 bytes 字段,
+          # 两条路不一样, 都得验
+          ls -l ws_shot.png grpc_shot.png
+          test -s ws_shot.png
+          test -s grpc_shot.png
 
       - name: 深度冒烟 —— 真起一次 PeerJS 服务 (需要外网, 失败不阻塞)
         # 只开 PeerJS 一个传输, 看它能不能注册到公开 broker 拿到房间码。
@@ -140,8 +175,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release create "${GITHUB_REF_NAME}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
-            --generate-notes \
-            kuuki-agent-windows-x64.zip
+          set -euo pipefail
+          # 幂等: 重跑一次 workflow (或补跑失败的 run) 时 Release 已经存在了,
+          # 直接 create 会 "already_exists" 失败, 那只是重跑, 不是构建坏了
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} 已存在, 改为覆盖上传产物"
+            gh release upload "${GITHUB_REF_NAME}" kuuki-agent-windows-x64.zip \
+              --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes \
+              kuuki-agent-windows-x64.zip
+          fi

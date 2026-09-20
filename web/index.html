@@ -15,6 +15,12 @@
         </header>
 
         <section id="pair" class="card">
+            <!-- 直接访问页面 (没扫二维码) 时显示: 手打 5 位大写房间码在手机上是折磨,
+                 得告诉他其实不用打 —— 电脑上 --qr 扫一下就都填好了 -->
+            <p id="pairHint" class="hint hidden">
+                在电脑上跑 <code>python -m remote --qr</code>, 扫它打印的二维码 —— 房间码和
+                token 会自动填好。手动输入只在没得扫的时候用。
+            </p>
             <label for="roomInput">房间码</label>
             <input id="roomInput" placeholder="ABCDE" autocomplete="off" autocapitalize="characters" maxlength="8">
             <label for="tokenInput">Token (主机设了 <code>--token</code> 才要填)</label>

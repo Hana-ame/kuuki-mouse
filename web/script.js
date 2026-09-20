@@ -25,6 +25,9 @@
     }
     let room = roomFromHash();
     if (room) $('roomInput').value = room;
+    // 没带房间码 = 有人直接打开了页面 (没扫二维码)。这时候让他手打 5 位大写码是折磨,
+    // 把"其实可以扫码"说在前面; 扫进来的则直接开干, 不用看这段。
+    if (!room) $('pairHint').classList.remove('hidden');
     let token = tokenFromHash();
     if (token) $('tokenInput').value = token;
     // 主机设了 --token 时, 不先 auth 就发数据会被拒收并断开 —— 连上先握手再说话
@@ -131,6 +134,9 @@
                     // 再连也只是再被拒一次, 而且用户看不出为什么 —— 停下来把原因说清楚
                     statusEl.textContent = 'token 未通过, 已停止重连 — 改对后点"开始配对"';
                     chanEl.textContent = '未授权';
+                    // 配对区在连上时就藏起来了, 不把它放回来的话上面这句"改对"是空话:
+                    // 用户根本看不到输入框, 只能刷新页面重来。
+                    pairEl.classList.remove('hidden');
                     return;
                 }
                 statusEl.textContent = 'PeerJS 断开, 重连中...';

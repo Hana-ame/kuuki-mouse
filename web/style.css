@@ -16,6 +16,17 @@ header h1 { margin: 0 0 4px; font-size: 22px; }
 }
 .hidden { display: none; }
 
+/* 没扫二维码直接打开页面时的引导。默认藏在 HTML 里, 由 script.js 判断要不要显示 */
+.hint {
+    font-size: 13px; line-height: 1.6; color: #9aa3b2;
+    background: #232936; border-left: 3px solid #3b82f6;
+    border-radius: 6px; padding: 10px 12px; margin: 0 0 14px;
+}
+.hint code {
+    color: #7dd3fc; background: #0f1117; padding: 1px 5px;
+    border-radius: 4px; font-size: 12px;
+}
+
 label { font-size: 13px; color: #9aa3b2; display: block; margin-bottom: 6px; }
 #roomInput {
     width: 100%; padding: 12px; font-size: 18px; letter-spacing: 4px;

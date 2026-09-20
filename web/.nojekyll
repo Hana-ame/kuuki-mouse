@@ -1,0 +1,6 @@
+# GitHub Pages 默认会把上传的目录过一遍 Jekyll 再发布。
+# 这里全是静态文件 (index.html / script.js / style.css / vendor/), 没有任何模板语法,
+# 过 Jekyll 只是白白多一次构建; 更要紧的是 Jekyll 会**跳过下划线开头的目录**,
+# 万一以后加个 _xxx/ 就会在 Pages 上静默消失 —— 本地跑得好好的, 上线才不见。
+#
+# 这个文件本身是空标记, 存在即生效: 告诉 Pages 直接按静态文件托管, 别跑 Jekyll。

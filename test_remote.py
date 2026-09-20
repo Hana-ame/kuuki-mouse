@@ -700,6 +700,11 @@ NEW_OP_CASES = [
     ("mouse.click", {"x": 111, "interval": 0}),
     ("mouse.click", {"y": 222, "interval": 0}),
     ("mouse.click", {"interval": 0}),
+    # hold: 它是 click 的返回值之一, 所以"gRPC 侧漏传 hold"会直接表现为两条传输
+    # 的返回值不同 (服务端默认 60ms vs 显式 0) —— 这条用例专门钉它
+    ("mouse.click", {"hold": 0}),
+    ("mouse.click", {"hold": 0.25}),
+    ("mouse.click", {"interval": 0, "hold": 0}),
     ("mouse.scroll", {"dy": 7, "steps": 3, "interval": 0}),
     ("mouse.scroll", {"dy": 2, "x": 111}),
     ("mouse.scroll", {"dy": 2, "y": 222}),
@@ -767,6 +772,34 @@ def test_new_ops_agree_across_transports():
     ):
         assert flatten(ws_result) == flatten(grpc_result), f"{op} {args} 返回值不一致"
         assert ws_side == grpc_side, f"{op} {args} 副作用不一致"
+
+
+def test_click_optional_numbers_keep_explicit_zero():
+    """click 的 interval / hold 是 optional 且 0 是合法值。
+
+    客户端构造请求时"给了才写" —— 写成 ``float(args.get(k) or 默认)`` 会把
+    ``--interval 0`` / ``--hold 0`` 静默变成默认值, 两条传输的行为就岔开了。
+    """
+    from remote.client import _optional_number
+    from remote.proto import kuuki_remote_pb2 as pb
+
+    given = pb.ClickMouseRequest(
+        button="left", clicks=1, **_optional_number({"interval": 0, "hold": 0},
+                                                    "interval", "hold"),
+    )
+    assert given.HasField("interval") and given.interval == 0.0
+    assert given.HasField("hold") and given.hold == 0.0
+
+    omitted = pb.ClickMouseRequest(
+        button="left", clicks=1, **_optional_number({}, "interval", "hold"),
+    )
+    assert not omitted.HasField("interval")
+    assert not omitted.HasField("hold")
+
+    # 非零当然也要真的过去
+    normal = pb.ClickMouseRequest(**_optional_number({"interval": 0.5, "hold": 0.25},
+                                                     "interval", "hold"))
+    assert normal.interval == 0.5 and normal.hold == 0.25
 
 # ================================================================ 窗口 (P2)
 #

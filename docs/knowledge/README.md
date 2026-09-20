@@ -25,6 +25,7 @@
 - [空格 / 制表符是合法键名，不能先 strip 再判空](protocol-key-whitespace.md)
 - [`MessageToDict` 会省略取默认值的字段](protocol-messagetodict-defaults.md)
 - [【已修】`mouse.click` 静默忽略 `x` / `y`](protocol-mouse-click-ignores-xy.md)
+- [跨传输等价性测不出来, 先看看参数有没有回进返回值](protocol-optional-param-needs-echo.md)
 - [proto3 普通标量分不清「显式给 0」与「缺省」](protocol-proto3-optional.md)
 - [多步滚动要保持总量守恒](protocol-scroll-total-conservation.md)
 - [「0 是合法值」的字段不能用 `x or default`](protocol-zero-is-valid-value.md)
@@ -126,4 +127,4 @@
 
 ---
 
-共 **65 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。
+共 **66 条**。新增知识点文件时按上述前缀命名，索引会自动接住它。

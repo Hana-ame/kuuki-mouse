@@ -461,7 +461,7 @@ WS 的 `op` 与 gRPC 的 RPC 语义一致; 带 `*` 的是短别名。
 | `mouse.position` *`position`* | — | 当前光标 |
 | `mouse.move` *`move`* | `x` `y` `duration` | 绝对定位 (`duration>0` 平滑) |
 | `mouse.move_rel` *`move_rel`* | `dx` `dy` `duration` | 相对移动 |
-| `mouse.click` *`click`* | `button` `clicks` `interval` `hold` `x` `y` `move_duration` | 点击 (`hold` 默认 60ms)。`x`/`y` 先移动再点 (可只给一个), 返回值带 `positioned_at` |
+| `mouse.click` *`click`* | `button` `clicks` `interval` `hold` `x` `y` `move_duration` | 点击 (`interval` 默认 50ms, `hold` 默认 60ms)。`x`/`y` 先移动再点 (可只给一个), 返回值带 `positioned_at`; `interval` / `hold` 也回在返回值里 (这样才能跨传输比对 —— 两条传输在这两个字段上曾经不等价) |
 | `mouse.down` / `mouse.up` | `button` | 按住 / 松开 |
 | `mouse.scroll` *`scroll`* | `dx` `dy` (兼容老协议 `delta`) `steps` `interval` `x` `y` | 滚轮, `dy>0` 向上。`steps>1` 拆成多步平滑滚动 (总增量仍等于 `dx`/`dy`); `x`/`y` 先定位再滚 |
 | `mouse.scroll_h` *`scroll_h`* | 同 `mouse.scroll` (`dx` 为主体) | 横向滚动 |

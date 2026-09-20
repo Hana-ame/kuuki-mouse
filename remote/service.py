@@ -377,7 +377,10 @@ class RemoteService:
         y = _as_int(y, "y") if y is not None else None
         move_duration = _as_float(args.get("move_duration"), "move_duration", 0.0)
         done = self.controller.click(button, clicks, interval, hold, x, y, move_duration)
-        result = {"button": button, "clicks": done, "hold": hold}
+        # interval 也回进返回值: 它是"这次点击怎么执行的"的一部分, 而且只有回进来
+        # 才能跨传输比对 —— 否则 gRPC 侧把显式 0 换成默认值这种偏差测不出来
+        # (hold 同理, 它就是在补 hold 字段时靠返回值抓出来的)
+        result = {"button": button, "clicks": done, "hold": hold, "interval": interval}
         if x is not None or y is not None:
             result["positioned_at"] = {"x": x, "y": y}
         return result

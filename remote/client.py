@@ -375,7 +375,11 @@ class GrpcClient:
                 pb.ClickMouseRequest(
                     button=args.get("button", "left"),
                     clicks=int(args.get("clicks", 1) or 1),
-                    interval=float(args.get("interval", 0.05) or 0.05),
+                    # interval / hold 是 optional 且 0 是合法值: 只在 args 里真的
+                    # 给了才写进请求, 否则服务端会用默认 (50ms / 60ms)。
+                    # 写成 `or 默认` 会把 --interval 0 / --hold 0 静默改成默认值,
+                    # 于是同一条命令在 WS 与 gRPC 上行为不一样。
+                    **_optional_number(args, "interval", "hold"),
                     **_optional_at(args),
                 ),
                 **self._kwargs(),
@@ -817,6 +821,20 @@ def _optional_at(args: dict) -> dict:
         out["at_x"] = int(args["x"])
     if args.get("y") is not None:
         out["at_y"] = int(args["y"])
+    return out
+
+
+def _optional_number(args: dict, *names: str) -> dict:
+    """取出 args 里若干数值参数, 只把"真的给了"的写进 proto 的 optional 字段。
+
+    与 ``_optional_at`` 一个道理, 只是字段是浮点: 显式 0 必须真的写进去
+    (``--interval 0`` = 连击之间不等, ``--hold 0`` = 按下即松开), 而"没给"
+    要留给服务端默认值。``float(args.get(k) or default)`` 做不到这一点。
+    """
+    out: Dict[str, float] = {}
+    for name in names:
+        if args.get(name) is not None:
+            out[name] = float(args[name])
     return out
 
 

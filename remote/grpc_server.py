@@ -327,10 +327,15 @@ class RemoteControlServicer(pb_grpc.RemoteControlServicer):
             payload = {
                 "button": request.button or "left",
                 "clicks": int(request.clicks) or 1,
-                "interval": request.interval or 0.05,
             }
-            # at_x / at_y 是 optional: 只在显式给了时才传下去, 让"原点也可以是
-            # 目标"这件事在 gRPC 侧与 WS 侧一致 (鼠标 click 的坐标语义: 先移动再点)
+            # interval / hold / at_x / at_y 都是 optional, 只在显式给了时才传下去:
+            # 这四个字段上 0 都是合法值 (interval=0 表示连击之间不等; hold=0 表示
+            # 按下即松开; at_x/at_y=0 表示原点就是目标), 写成 `x or default` 会把
+            # 显式 0 悄悄换成默认值, 于是同一条请求在 gRPC 与 WS 上行为不同。
+            if request.HasField("interval"):
+                payload["interval"] = float(request.interval)
+            if request.HasField("hold"):
+                payload["hold"] = float(request.hold)
             if request.HasField("at_x"):
                 payload["x"] = int(request.at_x)
             if request.HasField("at_y"):

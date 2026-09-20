@@ -2,11 +2,19 @@
 
 ## 未修的 bug
 
-| 位置 | 问题 | 详见 |
-|---|---|---|
-| proto `ClickMouseRequest` | `interval` 是普通标量，分不清显式 0 与缺省 | `protocol-proto3-optional.md` |
-| proto `ClickMouseRequest` | **没有 `hold` 字段** —— WS 支持 `hold`、gRPC 不支持 | — |
+**目前没有**（2026-09-21 把最后两条一起修了，见下）。
 
+> 2026-09-21 已修掉：proto `ClickMouseRequest` 的 `interval` 是普通标量、且没有
+> `hold` 字段 —— 于是「gRPC 不支持 `--hold`」与「`--interval 0` 在 gRPC 侧被当成
+> 没给」（见 `protocol-zero-is-valid-value.md` / `protocol-proto3-optional.md`）。
+> 修法是 `interval` 改 `optional` + 新增 `optional hold`，**五处一起跟**：proto →
+> 重新生成存根 → `grpc_server.py` 用 `HasField` 传 → `client.py` 的
+> `_optional_number`（给了才写，`or 默认` 会把显式 0 吞掉）→ 文档。
+> 顺带把 `interval` 也加进 `mouse.click` 的返回值 —— **返回值里没有的参数是测不出
+> 跨传输差异的**：`hold` 一补就被 `test_new_ops_agree_across_transports` 抓到，
+> `interval` 却静默通过了「把 0 换成 0.05」的变异测试，直到它进了返回值才红。
+> （变异测试值得做：改一行看用例红不红，不红的判据等于没有判据。）
+>
 > 2026-09-20 已修掉：`mouse.click` 静默忽略 `x`/`y`（见
 > `protocol-mouse-click-ignores-xy.md`）、`keyboard.paste` 中文经 `clip.exe`
 > 变 GBK 乱码（见 `gui-chinese-input-via-clipboard.md`）、`{"key": " "}` 空格
@@ -37,10 +45,11 @@
 | op / 能力 | WS | gRPC | PeerJS |
 |---|---|---|---|
 | `screen.grab` / `screen.watch` / `screen.unwatch` | ✅ | ❌（推流走 `StreamScreenshots` 服务端流式，不是 op） | ❌ |
-| `mouse.click` 的 `hold` 参数 | ✅ | ❌ proto 里没这个字段 | ✅ |
 
-> 2026-09-20 更新: 表里原有第三行 `notify` 已修 —— `grpc_server.py` 补了 `Notify`
-> RPC, 三传输等价了。剩下两行仍在。window 三个 op 是**补 op 时就三条传输一起加的**
+> 2026-09-21 更新: `mouse.click` 的 `hold` 那行已修 (proto 补了 `optional hold`,
+> 五处都跟上了)。2026-09-20 那次修的是 `notify` —— `grpc_server.py` 补了 `Notify`
+> RPC。表里只剩 `screen.grab` / `screen.watch` 这一类「推流式」能力没进 gRPC,
+> 而它们在 gRPC 上本来就走 `StreamScreenshots` 服务端流式, 不是同一套 op 语义。window 三个 op 是**补 op 时就三条传输一起加的**
 > (`ListWindows` / `GetForegroundWindow` / `FocusWindow`), 等价性由
 > `test_window_ops_agree_across_transports` 保证。
 

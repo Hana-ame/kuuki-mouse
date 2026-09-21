@@ -727,14 +727,31 @@ PNG 魔数正确; region 裁剪 + `max_width` 缩放 (320x200 区域 → 160x100
 CI 每次推 `master` / `feat/remote-control` 都会在 windows-latest 上打一次, 但**只打
 受控端** —— 控制端 (`remote.ctl` / `remote.client`) 一直在开发环境跑源码, 不进包。
 
+**两种分发物**, 同一个 exe, 只是"怎么到用户手上"不同:
+
+| 分发物 | 谁用 | 怎么用 |
+|---|---|---|
+| `kuuki-agent-setup.exe` | 被操作的那台机器 (往往没 Python) | 双击 → 下一步 → 完成; 开始菜单有入口, 设置里能卸载 |
+| `kuuki-agent-windows-x64.zip` | 临时用 / 不想写进系统 | 解压 → 双击 `kuuki-agent\kuuki-agent.exe` |
+
 - 普通推送: 仓库 → **Actions** → 点最新的 `Build kuuki-agent` → 底部 **Artifacts**
-  里下 `kuuki-agent-windows-x64.zip` (保留 14 天)
-- 发版本: `git tag v0.1.0 && git push origin v0.1.0` —— 自动建 Release 并把 zip 挂上去
+  里下 `kuuki-agent-windows-x64.zip` 与 `kuuki-agent-setup.exe` (保留 14 天)
+- 发版本: `git tag v0.1.0 && git push origin v0.1.0` —— 自动建 Release, 两个都挂上去
 - 自己打: `pip install -r requirements.txt -r requirements-remote.txt -r requirements-build.txt`
-  然后 `pyinstaller packaging/kuuki-agent.spec --noconfirm`, 产物在 `dist/kuuki-agent/`
+  然后 `pyinstaller packaging/kuuki-agent.spec --noconfirm`, 产物在 `dist/kuuki-agent/`;
+  再 `ISCC packaging/installer.iss "/DMyAppVersion=v0.1.0"` 出安装包 (需 Inno Setup 6)
 
 产物是 onedir (不是单文件): aiortc / av 有一堆 DLL, 单文件每次启动都要解上百 MB。
-zip 里带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstaller-ci.md`。
+zip 与安装包里都带一份 `README.txt` 说明怎么起。坑与实测见 `docs/pyinstaller-ci.md`。
+
+安装器 (`packaging/installer.iss`) 有三条定死的设计, 都是刻意选的:
+
+- **不需要管理员权限** —— 装到 `%LOCALAPPDATA%\Programs`, 不弹 UAC。受控端没有
+  必须以系统级运行的理由, 而 UAC 弹窗是"一键安装"最大的绊脚石。
+- **不碰防火墙** —— 默认只绑 127.0.0.1, PeerJS 是本机连出去注册 (出方向), 都不需要
+  入站放行。只有 `--allow-remote` 要放行, 而那是"明确要暴露到局域网"的决定,
+  该由人手动做, 不该被安装器偷偷设成默认。
+- **开机自启默认关** —— 能让别人控制这台机器的东西, 自启是要点头的选项。
 
 ## 10. 测试与验证状态
 

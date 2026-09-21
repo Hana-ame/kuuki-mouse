@@ -9,8 +9,9 @@
 # 打出来也是个一启动就退出的 exe。
 #
 # 产物:
-#   - 每次推送: Actions artifacts (保留 14 天)
-#   - 推 v* tag: 额外创建 GitHub Release, 挂 kuuki-agent-windows-x64.zip
+#   - 每次推送: Actions artifacts (保留 14 天) —— zip + 安装包 (有 Inno Setup 时才有)
+#   - 推 v* tag: 额外创建 GitHub Release, 挂上面两个
+#     zip = 解压即用; 安装包 = 双击安装 + 控制面板能卸载, 给"被操作的那台机器"的使用者
 #
 # 本地复现:
 #   pip install -r requirements.txt -r requirements-remote.txt "pyinstaller>=6"
@@ -267,6 +268,40 @@ jobs:
           Compress-Archive -Path dist/kuuki-agent, README.txt -DestinationPath kuuki-agent-windows-x64.zip
           Get-Item kuuki-agent-windows-x64.zip | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
+      - name: 编译安装包 (Inno Setup)
+        shell: pwsh
+        run: |
+          # 安装器是给"被操作的那台机器"的使用者的: 那边往往没 Python, 拿到 zip
+          # 还得自己解压、自己找 exe。runner 镜像自带 Inno Setup; 万一哪天没有,
+          # 跳过而不是让构建变红 —— 主产物 (zip) 已经打好了, 安装器是加分项。
+          $candidates = @(
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+            "C:\Program Files\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "这个 runner 上没有 Inno Setup, 跳过安装包编译"
+            exit 0
+          }
+          # 版本号只在打 tag 时是真的; 平常构建用一个一眼能认出的占位值
+          $ver = '0.0.0-dev'
+          if ($env:GITHUB_REF -like 'refs/tags/v*') { $ver = $env:GITHUB_REF_NAME }
+          Write-Host "ISCC: $iscc / version: $ver"
+          & $iscc "packaging\installer.iss" "/DMyAppVersion=$ver"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC 编译失败 (退出码 $LASTEXITCODE)" }
+          Get-Item kuuki-agent-setup.exe | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: 上传安装包
+        # 上一步在没找到 Inno Setup 时会跳过, 那时文件不存在 —— 别因此判失败
+        if: hashFiles('kuuki-agent-setup.exe') != ''
+        uses: actions/upload-artifact@v5
+        with:
+          overwrite: true
+          name: kuuki-agent-setup
+          path: kuuki-agent-setup.exe
+          if-no-files-found: error
+          retention-days: 14
+
       - name: 上传产物
         uses: actions/upload-artifact@v5
         with:
@@ -283,16 +318,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # zip 一定有; 安装包只在 runner 上有 Inno Setup 时才有 —— 有什么挂什么,
+          # 别为了"两个都在"把构建搞脆。
+          ASSETS=(kuuki-agent-windows-x64.zip)
+          if [ -f kuuki-agent-setup.exe ]; then
+            ASSETS+=(kuuki-agent-setup.exe)
+          fi
+          echo "要挂的产物: ${ASSETS[*]}"
           # 幂等: 重跑一次 workflow (或补跑失败的 run) 时 Release 已经存在了,
           # 直接 create 会 "already_exists" 失败, 那只是重跑, 不是构建坏了
           if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "Release ${GITHUB_REF_NAME} 已存在, 改为覆盖上传产物"
-            gh release upload "${GITHUB_REF_NAME}" kuuki-agent-windows-x64.zip \
+            gh release upload "${GITHUB_REF_NAME}" "${ASSETS[@]}" \
               --repo "${GITHUB_REPOSITORY}" --clobber
           else
             gh release create "${GITHUB_REF_NAME}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${GITHUB_REF_NAME}" \
               --generate-notes \
-              kuuki-agent-windows-x64.zip
+              "${ASSETS[@]}"
           fi

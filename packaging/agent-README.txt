@@ -1,8 +1,19 @@
 kuuki-agent —— kuuki-mouse 受控端 (装在"被操作的那台机器"上)
 
-用法:
-  双击 kuuki-agent\kuuki-agent.exe
-  命令行看全部参数: kuuki-agent\kuuki-agent.exe --help
+两种装法:
+
+  1) 安装包 (推荐)  双击 kuuki-agent-setup.exe -> 下一步 -> 完成
+     装到 %LOCALAPPDATA%\Programs\kuuki-agent, 开始菜单里有入口,
+     "设置 -> 应用" 里能卸干净。**不需要管理员权限** (不弹 UAC)。
+     装完默认不开开机自启 —— 需要的话在安装时勾一下, 或自己把快捷方式
+     放进 shell:startup。
+
+  2) 便携 zip      解压后双击 kuuki-agent\kuuki-agent.exe
+     什么都不写进系统, 删掉目录就没了。
+
+启动与参数 (两种装法都一样):
+  双击 kuuki-agent.exe
+  命令行看全部参数: kuuki-agent.exe --help
 
 启动后默认只开一个通道:
   PeerJS     注册到公开 broker, 启动时会给出房间码 (手机扫码配对用),

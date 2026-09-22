@@ -103,9 +103,23 @@ class _RememberPort(argparse.Action):
         setattr(namespace, f"{self.dest}_explicit", True)
 
 
+def prog_name() -> str:
+    """``--help`` 第一行 ``usage:`` 里报什么名字。
+
+    源码运行报 ``python -m remote``; 被打成 exe 时报 exe 自己的名字。
+    为什么这点值得区分: 拿到 kuuki-agent.exe 的人往往没装 Python —— 帮助第一行
+    写着 ``usage: python -m remote``, 他会以为还得先装 Python, 或者以为自己点错了
+    程序。而事实是这一份就是能跑的全部。(client / ctl 不进包, 一直是源码运行,
+    所以那边写死模块调用名是对的。)
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.basename(sys.executable) or "kuuki-agent"
+    return "python -m remote"
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m remote",
+        prog=prog_name(),
         description=(
             "kuuki-mouse 远程控制扩展: 鼠标/键盘控制 + 截屏, "
             "WebSocket / gRPC / PeerJS 三种传输按需开启, 默认只开 PeerJS "
@@ -432,6 +446,10 @@ async def run_servers(args: argparse.Namespace, transports: list) -> int:
             print("  客户端示例: python -m remote.client grpc ping")
         elif peerjs_server is not None:
             print(f"  客户端示例: python -m remote.client peerjs --peer {peerjs_server.peer_id} ping")
+        # 这一行是给"双击 exe 的人"看的: 他手上这台机器多半没装 Python, 上面那条
+        # 示例对他就是天书 —— 得说清控制端在**另一台**机器上跑源码, 不在本包里,
+        # 否则他会以为是这台机器上还要装点什么。
+        print("  控制端    : 上面的命令在另一台机器上跑 (需要 Python), 本包只含受控端")
         sys.stdout.flush()
 
     stop = asyncio.Event()

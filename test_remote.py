@@ -3374,3 +3374,32 @@ def test_click_text_args_keeps_explicit_zero():
     assert out["index"] == 0
     assert out["interval"] == 0 and out["hold"] == 0
     assert out["move_duration"] == 0
+
+
+def test_help_usage_reports_exe_name_when_frozen(monkeypatch):
+    """打成 exe 后, --help 第一行要报 exe 自己的名字。
+
+    拿到 kuuki-agent.exe 的人往往没装 Python —— usage 里写 `python -m remote`
+    会让他以为还得先装环境, 或者以为点错了程序。
+    """
+    import remote.__main__ as main_module
+
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        main_module.sys,
+        "executable",
+        "C:\\apps\\kuuki-agent\\kuuki-agent.exe",
+    )
+    assert main_module.prog_name() == "kuuki-agent.exe"
+
+    # 源码运行时照旧 —— 文档里全是 python -m remote ..., 换了就全对不上
+    monkeypatch.delattr(main_module.sys, "frozen", raising=False)
+    assert main_module.prog_name() == "python -m remote"
+
+
+def test_parser_really_uses_prog_name(monkeypatch):
+    """prog_name() 定义了就得真的接上 —— 只定义不接, 上一条测试照样过。"""
+    import remote.__main__ as main_module
+
+    monkeypatch.setattr(main_module, "prog_name", lambda: "kuuki-agent.exe")
+    assert main_module.build_parser().prog == "kuuki-agent.exe"

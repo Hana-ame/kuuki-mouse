@@ -1,13 +1,3 @@
-
-1/4 台失败: pc-dead
-
-1/3 台失败: pc-dead
-
-1/4 台失败: pc-dead
-
-1/3 台失败: pc-dead
-
-1/3 台失败: pc-dead
 受控端已起: ws://127.0.0.1:8799 (token=demo)
 
 $ ctl machines add pc-a --transport ws --endpoint ws://127.0.0.1:8799 --token demo -g office --force
@@ -26,44 +16,54 @@ $ ctl machines add pc-dead --transport ws --endpoint ws://127.0.0.1:9999 --token
 
 $ ctl ping -a
 -> ping {}   目标: pc-a, pc-b, pc-dead, pc-lab
-OK   pc-a            87.8ms  {"ok": true, "pong": true, "ts": 1790078733.048426, "uptime_s": 1.156, "version": "0.1.0"}
-OK   pc-b            87.8ms  {"ok": true, "pong": true, "ts": 1790078733.048426, "uptime_s": 1.156, "version": "0.1.0"}
-FAIL pc-dead       2102.1ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
-OK   pc-lab          87.8ms  {"ok": true, "pong": true, "ts": 1790078733.0494277, "uptime_s": 1.157, "version": "0.1.0"}
-(4 台并发扇出总耗时 2.16s; pc-dead 单独带 3s 超时)
+OK   pc-a           101.6ms  {"ok": true, "pong": true, "ts": 1790079349.040868, "uptime_s": 1.165, "version": "0.1.0"}
+OK   pc-b           101.6ms  {"ok": true, "pong": true, "ts": 1790079349.0418699, "uptime_s": 1.166, "version": "0.1.0"}
+FAIL pc-dead       2108.6ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
+OK   pc-lab         101.8ms  {"ok": true, "pong": true, "ts": 1790079349.0418699, "uptime_s": 1.166, "version": "0.1.0"}
+
+1/4 台失败: pc-dead; 其余 3 台正常
+(4 台并发扇出总耗时 2.18s; pc-dead 单独带 3s 超时)
 
 ========== 2) 只看 office 组 ==========
 
 $ ctl ping -g office
 -> ping {}   目标: pc-a, pc-b, pc-dead
-OK   pc-a             5.8ms  {"ok": true, "pong": true, "ts": 1790078735.1267307, "uptime_s": 3.234, "version": "0.1.0"}
-OK   pc-b             5.8ms  {"ok": true, "pong": true, "ts": 1790078735.1277282, "uptime_s": 3.235, "version": "0.1.0"}
-FAIL pc-dead       2027.1ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
+OK   pc-a             7.2ms  {"ok": true, "pong": true, "ts": 1790079351.1316595, "uptime_s": 3.256, "version": "0.1.0"}
+OK   pc-b             7.2ms  {"ok": true, "pong": true, "ts": 1790079351.1316595, "uptime_s": 3.256, "version": "0.1.0"}
+FAIL pc-dead       2023.0ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
+
+1/3 台失败: pc-dead; 其余 2 台正常
 
 ========== 3) 扇出截屏: 目录按别名分文件 ==========
 
 $ ctl shot D:\WorkPlace\kuuki-mouse\build\ctl-demo\shots -a --format jpeg --quality 60 --region 0,0,320,200
-OK   pc-a           136.0ms  {"path": "D:\\WorkPlace\\kuuki-mouse\\build\\ctl-demo\\shots\\pc-a.jpg", "bytes": 7588, "event": "image", "id": 1, "format": "jpeg", "width": 320, "height": 200, "source_width": 1680, "source_height": 1050, "scale": 1.0, "ts": 1790078737.251144, "duration_ms": 125.59, "backend": "pillow", "region": {"left": 0, "top": 0, "width": 320, "height": 200}, "transport": "ws"}
-OK   pc-b           135.5ms  {"path": "D:\\WorkPlace\\kuuki-mouse\\build\\ctl-demo\\shots\\pc-b.jpg", "bytes": 7588, "event": "image", "id": 1, "format": "jpeg", "width": 320, "height": 200, "source_width": 1680, "source_height": 1050, "scale": 1.0, "ts": 1790078737.2836752, "duration_ms": 92.06, "backend": "pillow", "region": {"left": 0, "top": 0, "width": 320, "height": 200}, "transport": "ws"}
+OK   pc-a           147.3ms  {"path": "D:\\WorkPlace\\kuuki-mouse\\build\\ctl-demo\\shots\\pc-a.jpg", "bytes": 5595, "event": "image", "id": 1, "format": "jpeg", "width": 320, "height": 200, "source_width": 1680, "source_height": 1050, "scale": 1.0, "ts": 1790079353.2265804, "duration_ms": 136.1, "backend": "pillow", "region": {"left": 0, "top": 0, "width": 320, "height": 200}, "transport": "ws"}
+OK   pc-b           147.2ms  {"path": "D:\\WorkPlace\\kuuki-mouse\\build\\ctl-demo\\shots\\pc-b.jpg", "bytes": 5595, "event": "image", "id": 1, "format": "jpeg", "width": 320, "height": 200, "source_width": 1680, "source_height": 1050, "scale": 1.0, "ts": 1790079353.2685804, "duration_ms": 93.1, "backend": "pillow", "region": {"left": 0, "top": 0, "width": 320, "height": 200}, "transport": "ws"}
 FAIL pc-dead       2017.1ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
-OK   pc-lab         135.5ms  {"path": "D:\\WorkPlace\\kuuki-mouse\\build\\ctl-demo\\shots\\pc-lab.jpg", "bytes": 7588, "event": "image", "id": 1, "format": "jpeg", "width": 320, "height": 200, "source_width": 1680, "source_height": 1050, "scale": 1.0, "ts": 1790078737.3147342, "duration_ms": 61.0, "backend": "pillow", "region": {"left": 0, "top": 0, "width": 320, "height": 200}, "transport": "ws"}
-  pc-a.jpg  7588 bytes
-  pc-b.jpg  7588 bytes
-  pc-lab.jpg  7588 bytes
+OK   pc-lab         147.2ms  {"path": "D:\\WorkPlace\\kuuki-mouse\\build\\ctl-demo\\shots\\pc-lab.jpg", "bytes": 5595, "event": "image", "id": 1, "format": "jpeg", "width": 320, "height": 200, "source_width": 1680, "source_height": 1050, "scale": 1.0, "ts": 1790079353.2986834, "duration_ms": 65.0, "backend": "pillow", "region": {"left": 0, "top": 0, "width": 320, "height": 200}, "transport": "ws"}
+
+1/4 台失败: pc-dead; 其余 3 台正常
+  pc-a.jpg  5595 bytes
+  pc-b.jpg  5595 bytes
+  pc-lab.jpg  5595 bytes
 
 ========== 4) 扇出读状态: 鼠标坐标 / 窗口列表 ==========
 
 $ ctl pos -g office
 -> mouse.position {}   目标: pc-a, pc-b, pc-dead
-OK   pc-a            27.1ms  {"ok": true, "x": 1128, "y": 283}
-OK   pc-b            27.1ms  {"ok": true, "x": 1128, "y": 283}
-FAIL pc-dead       2031.7ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
+OK   pc-a            37.4ms  {"ok": true, "x": 1362, "y": 531}
+OK   pc-b            37.4ms  {"ok": true, "x": 1362, "y": 531}
+FAIL pc-dead       2025.6ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
+
+1/3 台失败: pc-dead; 其余 2 台正常
 
 $ ctl windows -g office --limit 2
 -> window.list {"title": "", "process": "", "limit": 2, "include_hidden": false}   目标: pc-a, pc-b, pc-dead
-OK   pc-a            15.6ms  {"ok": true, "windows": [{"hwnd": 5054216, "title": "ParsecMinFrameRate961", "process": "", "pid": 15056, "rect": {"left": 1, "top": 1, "width": 1, "height": 1}, "visible": true, "minimized": false, "foreground": false}, {"hwnd": 97849078, "title": "AI时代就业转型讨论 - DeepSeek 和另外 8 个页面 - 个人 - Microsoft​ Edge", "process": "msedge", "pid": 51920, "rect": {"left": -8, "top": -8, "width": 1696, "height": 1026}, "visible": true, "minimized": false, "foreground": true}], "count": 2}
-OK   pc-b            16.0ms  {"ok": true, "windows": [{"hwnd": 5054216, "title": "ParsecMinFrameRate961", "process": "", "pid": 15056, "rect": {"left": 1, "top": 1, "width": 1, "height": 1}, "visible": true, "minimized": false, "foreground": false}, {"hwnd": 97849078, "title": "AI时代就业转型讨论 - DeepSeek 和另外 8 个页面 - 个人 - Microsoft​ Edge", "process": "msedge", "pid": 51920, "rect": {"left": -8, "top": -8, "width": 1696, "height": 1026}, "visible": true, "minimized": false, "foreground": true}], "count": 2}
-FAIL pc-dead       2030.2ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
+OK   pc-a            20.5ms  {"ok": true, "windows": [{"hwnd": 5054216, "title": "ParsecMinFrameRate961", "process": "", "pid": 15056, "rect": {"left": 1, "top": 1, "width": 1, "height": 1}, "visible": true, "minimized": false, "foreground": false}, {"hwnd": 12788324, "title": "WorkBuddy", "process": "WorkBuddy", "pid": 33116, "rect": {"left": -8, "top": -8, "width": 1696, "height": 1026}, "visible": true, "minimized": false, "foreground": true}], "count": 2}
+OK   pc-b            20.5ms  {"ok": true, "windows": [{"hwnd": 5054216, "title": "ParsecMinFrameRate961", "process": "", "pid": 15056, "rect": {"left": 1, "top": 1, "width": 1, "height": 1}, "visible": true, "minimized": false, "foreground": false}, {"hwnd": 12788324, "title": "WorkBuddy", "process": "WorkBuddy", "pid": 33116, "rect": {"left": -8, "top": -8, "width": 1696, "height": 1026}, "visible": true, "minimized": false, "foreground": true}], "count": 2}
+FAIL pc-dead       2030.8ms  ConnectionRefusedError: [WinError 1225] 远程计算机拒绝网络连接。
+
+1/3 台失败: pc-dead; 其余 2 台正常
 
 ========== 5) 结果回填进注册表 (online / offline) ==========
 

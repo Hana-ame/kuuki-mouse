@@ -1268,7 +1268,12 @@ async def _run_action(args: argparse.Namespace, registry: Registry) -> int:
     render(results, args.json)
     failed = [item["alias"] for item in results if not item["ok"]]
     if failed:
-        print(f"\n{len(failed)}/{len(results)} 台失败: {', '.join(failed)}", file=sys.stderr)
+        # 这行单独看容易被读成"全都失败了" —— 有成功的就把成功台数也写上。
+        # (另外它走 stderr: 重定向到文件时 stdout 是块缓冲、stderr 逐行落盘,
+        #  两股输出在文件里会前后错开, 所以这行本身必须自带完整信息。)
+        ok = len(results) - len(failed)
+        tail = f"; 其余 {ok} 台正常" if ok else ""
+        print(f"\n{len(failed)}/{len(results)} 台失败: {', '.join(failed)}{tail}", file=sys.stderr)
         return 1
     return 0
 

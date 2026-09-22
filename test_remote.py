@@ -1194,6 +1194,35 @@ def test_ctl_expand_path_avoids_overwrite():
     assert ctl.expand_path("shots", "a", True, "jpeg").replace("\\", "/") == "shots/a.jpg"
 
 
+def test_ctl_failure_summary_reports_survivors(tmp_path, capsys, monkeypatch):
+    """失败汇总走 stderr: 重定向到文件时它会跑到 stdout 前面 —— 所以得自带成功台数。
+
+    只写 "1/3 台失败: pc-dead" 的话, 只看开头几行的人会以为三台全挂了
+    (真机演示的产物里就闹过这个误会)。
+    """
+    machines = [
+        ctl.Machine(alias="pc-a", transport="ws", endpoint="ws://a"),
+        ctl.Machine(alias="pc-dead", transport="ws", endpoint="ws://b"),
+        ctl.Machine(alias="pc-b", transport="ws", endpoint="ws://c"),
+    ]
+
+    async def fake_dispatch(_machines, _worker, serial=False):
+        return [
+            {"alias": "pc-a", "ok": True, "elapsed_ms": 1.0, "result": {"ok": True}},
+            {"alias": "pc-dead", "ok": False, "elapsed_ms": 2.0, "error": "ConnectionRefusedError: nope"},
+            {"alias": "pc-b", "ok": True, "elapsed_ms": 1.0, "result": {"ok": True}},
+        ]
+
+    monkeypatch.setattr(ctl, "dispatch", fake_dispatch)
+    monkeypatch.setattr(ctl.Registry, "resolve", lambda self, *a, **k: machines)
+    args = ctl._fill_defaults(ctl.build_parser().parse_args(["ping", "-a", "--no-update"]))
+
+    assert asyncio.run(ctl._run_action(args, ctl.Registry(str(tmp_path / "r.json")))) == 1
+    err = capsys.readouterr().err
+    assert "1/3 台失败: pc-dead" in err
+    assert "其余 2 台正常" in err
+
+
 def test_ctl_end_to_end_over_ws(tmp_path):
     """真的起一个 WS 受控端, 走一遍控制端的完整链路。
 

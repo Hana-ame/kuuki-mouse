@@ -33,6 +33,11 @@ LOG = OUT / "agent.log"
 
 sys.path.insert(0, str(ROOT))
 
+# 重定向到文件时 stdout 是块缓冲、stderr 逐行落盘, 两股输出会在文件里前后错开
+# (看起来像"全都失败了")。演示脚本要留下可读的产物, 所以强制 stdout 也逐行写。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 
 def wait_port(port: int, timeout: float = 25.0) -> None:
     deadline = time.time() + timeout

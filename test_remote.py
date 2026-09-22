@@ -1190,6 +1190,8 @@ def test_ctl_expand_path_avoids_overwrite():
     assert ctl.expand_path("shots", "a", True).replace("\\", "/") == "shots/a.png"
     # 占位符
     assert ctl.expand_path("f-{alias}.png", "a", True) == "f-a.png"
+    # 目录里落盘的扩展名要跟 --format 走, 否则 jpeg 存成 .png
+    assert ctl.expand_path("shots", "a", True, "jpeg").replace("\\", "/") == "shots/a.jpg"
 
 
 def test_ctl_end_to_end_over_ws(tmp_path):

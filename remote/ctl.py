@@ -664,20 +664,23 @@ def save_frames(directory: str, alias: str, index: int, extension: str, payload:
     return path
 
 
-def expand_path(path: str, alias: str, multi: bool) -> str:
+def expand_path(path: str, alias: str, multi: bool, extension: str = "png") -> str:
     """多台同时截屏时给文件名加别名, 避免后一台覆盖前一台。
 
     - 占位符 ``{alias}`` / ``{ts}`` 会替换
     - 多机 + 单个文件名: 自动插成 ``name-alias.ext``
+    - 多机 + 没扩展名: 当目录, 落 ``dir/alias.<extension>``
+      (扩展名要跟 ``--format`` 走, 否则 ``--format jpeg`` 会存出 .png 的 JPEG)
     """
     if "{alias}" in path or "{ts}" in path:
         return path.format(alias=alias, ts=time.strftime("%Y%m%d-%H%M%S"))
     if not multi:
         return path
-    root, extension = os.path.splitext(path)
-    if not extension:  # 没扩展名当作目录
-        return os.path.join(path, f"{alias}.png")
-    return f"{root}-{alias}{extension}"
+    root, suffix = os.path.splitext(path)
+    if not suffix:  # 没扩展名当作目录
+        normalized = "jpg" if extension == "jpeg" else extension
+        return os.path.join(path, f"{alias}.{normalized}")
+    return f"{root}-{alias}{suffix}"
 
 
 # ================================================================ CLI
@@ -1284,7 +1287,8 @@ async def _run_frames(args: argparse.Namespace, machines: Sequence[Machine]) -> 
         count = 0
 
     async def worker(machine: Machine) -> dict:
-        path = args.path if rolling else expand_path(args.path, machine.alias, multi)
+        path = args.path if rolling else expand_path(args.path, machine.alias, multi,
+                                                     getattr(args, "format", "png"))
         saved: List[str] = []
         total_bytes = 0
         index = 0
